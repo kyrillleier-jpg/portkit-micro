@@ -1,10 +1,10 @@
-"""Unicorn tests for patches/fidelity.py on the patched image (out/fidelity+cave/MICRO.BIN).
+"""Unicorn tests for patches/fidelity.py and patches/pages.py on the patched image (out/fidelity+pages+cave/MICRO.BIN).
 
 Real firmware code runs for: the Interp registration call, the app pad store (init 0x08089fc4, get/set), the stock
 cutoff / resonance curves, the parameter evaluator, the audio-buffer accessors, the two resampling kernels and the
 voice-start filter reset. Only the allocator (0x08042dc0) is replaced, by a bump allocator.
 
-  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity cave)
+  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity pages cave)
 """
 import math
 import os
@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "patches"))
 from thumb import BASE, symbols  # noqa: E402
 
-IMG = open(os.path.join(ROOT, "out", "fidelity+cave", "MICRO.BIN"), "rb").read()
+IMG = open(os.path.join(ROOT, "out", "fidelity+pages+cave", "MICRO.BIN"), "rb").read()
 SYM = symbols(os.path.join(ROOT, "out", "cave.elf"))
 
 APP_PADS = 0x24013CB0 + 0x1840
@@ -352,6 +352,17 @@ check("voice_read parks pad, position and rate", e.r32(PARK) == pad and e.r32(PA
 set_interp(0)
 e.call(SYM["voice_read"], pad, 0x11, 1234, 0x22, s=(0.5, 1.0), stack=(0x33, 0x44, 0x55, 0x66))
 check("voice_read: Normal pad keeps rate exactly 1.0", got["s"][1] == 1.0)
+
+# --- pad settings page (page 5) of every pad-mode table lists Interp right after Excl Group
+TABLES = {"Sample": (0x080C76C0, 0x080C78DC, 0x080C7AF8), "Clip": (0x080C6A1C, 0x080C6C38),
+          "Slicer": (0x080C7E28, 0x080C8044), "Granular": (0x080C6EEC, 0x080C7108)}
+for mode, tables in TABLES.items():
+    ok = True
+    for t in tables:
+        page = struct.unpack_from("<45H", IMG, t + 5 * 0x5A - BASE)
+        ids = list(page[:page.index(0)])
+        ok &= P_INTERP in ids and ids.index(P_INTERP) == ids.index(0xA6) + 1 and len(set(ids)) == len(ids)
+    check(f"{mode}: Fidelity on the pad settings page after Excl Group", ok)
 
 print(f"\n{'FAILED: ' + str(failures) if failures else 'all passed'}")
 sys.exit(1 if failures else 0)

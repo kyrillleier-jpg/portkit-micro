@@ -7,18 +7,19 @@ bitbox micro, Firmware 2.3.4. Keine Firmware in diesem Repo: Der Patcher arbeite
 
 | Funktion | Status |
 |---|---|
-| Fidelity (Interp-Liste: Normal, HighQ, SP1200, SP-12, S950, MPC60, SP Raw, 16k..2k) | durch Emulation bestaetigt, nicht am Geraet |
+| Fidelity (Interp-Liste: Normal, HighQ, SP1200, SP-12, S950, MPC60, SP Raw, 16k..2k) | am Geraet: laeuft, auf Sample-Pads einstellbar (pk1) |
 | 24-dB-SVF mit Drive auf Res (ersetzt den Pad-Biquad) | durch Emulation bestaetigt, nicht am Geraet |
 | Machine-Drive (Saturation als Wandler-Eingang) | nicht portiert (Micro hat keinen Saturation-Parameter) |
+| Fidelity auch auf der Pad-Seite von Clip, Slicer, Granular (`patches/pages.py`) | durch Emulation bestaetigt, nicht am Geraet |
 
-Splash: Zeile 2 `portkit mod`, Version `2.3.4-pk1`.
+Splash: Zeile 2 `portkit mod`, Version `2.3.4-pk2`.
 
 ## Bauen
 
 ```sh
 ./setup.sh                                  # Repos, venv, Hash-Check; firmware/MICRO.BIN muss 2.3.4 sein
 ./build.sh                                  # src/ -> out/cave.elf, out/cave.bin
-.venv/bin/python -I patch.py fidelity cave  # -> out/fidelity+cave/MICRO.BIN, mit Verifikation
+.venv/bin/python -I patch.py fidelity pages cave  # -> out/fidelity+pages+cave/MICRO.BIN, mit Verifikation
 .venv/bin/python -I tests/test_fidelity.py  # Unicorn-Tests auf dem gepatchten Image
 ```
 

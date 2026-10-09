@@ -126,3 +126,28 @@ blackbox-mod/emu.py mit `UC_CPU_ARM_MAX` im Thumb-Modus.
 Folgerung: Engine, App-Records und Preset-Format sind fuer 16 Pads ausgelegt (Framework der Blackbox). Die Grenze 8 sitzt
 vermutlich nur in der Bedienung (Touch, Anzeige, Pad-Auswahl) und bei MIDI (8 Kanaele laut Micro-Patcher). Nicht geprueft:
 CPU-Reserve bei 16 spielenden Pads, Speicher fuer 16 geladene Samples.
+
+## Hardware-Test pk1 (2026-10-09)
+
+Laeuft auf dem Geraet; Fidelity auf Sample-Pads sichtbar und einstellbar, "sonst geht schon sehr viel". Bei Clip, Slicer,
+Granular fehlte Interp in der Stock-Firmware schon (Geraet). Status Fidelity auf Sample-Pads: **hardware-verified**
+(Umfang laut Rueckmeldung; einzelne Modi, SVF, Last noch nicht einzeln rueckgemeldet).
+
+## Pad-Seiten (Build pk2)
+
+Pad-Modi (`cellmode` 0x6D): Sample, Clip, Slicer, Granular (+ Aktionen New Rec, New Multi).
+Seitentabellen je 6 Seiten x 45 Halfword-IDs (0x21C Bytes), Auswahl in 0x08076D8C (tbb auf Modus, zwei Varianten je Modus);
+Seite 5 = Pad-Einstellungen.
+
+| Modus | Tabellen | Seite 5 stock |
+|---|---|---|
+| Sample | 0x080C76C0, 0x080C78DC, 0x080C7AF8 | ... Excl Group, **Interp**, MIDI In, (Root Note), Pad Note |
+| Clip | 0x080C6A1C, 0x080C6C38 | Launch, Output, Poly (0x83), Excl Group, MIDI In, Pad Note |
+| Slicer | 0x080C7E28, 0x080C8044 | dto. (+ Root Note in 0x080C8044) |
+| Granular | 0x080C6EEC, 0x080C7108 | Launch, Output, Excl Group, MIDI In, Root Note, Pad Note |
+
+Store-Typen (Unicorn, Store-Init 0x08089FC4 fuer Typ 1..0x4A): Typ 3 = voller Pad-Store (58 IDs, u. a. Interp, Beat Count,
+Slice, Density, Pad Mode), Typ 0x45 = Boot-Default (36 IDs, Interp ja, Slice/Density nein). Der Preset-Leser behandelt
+Zellen vom Typ 3 / 0x45 als Pads → Interp ist fuer alle Pad-Modi speicherbar. `patches/pages.py` traegt 0xD2 hinter
+Excl Group in Clip/Slicer/Granular ein (beide Varianten). Status: durch Emulation bestaetigt (Tabelleninhalt), nicht am Geraet.
+Hinweis: "Poly Mode:" ist bei Sample 0x82, bei Clip/Slicer 0x83 (gleiches Label).

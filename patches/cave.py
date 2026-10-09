@@ -5,7 +5,7 @@ import os
 
 from thumb import ROOT, STOCK_END
 
-BUILD = b"1"    # 1 = Fidelity + 24 dB SVF (no machine drive)
+BUILD = b"2"    # 1 = Fidelity + 24 dB SVF (no machine drive), 2 = + Fidelity on Clip / Slicer / Granular pages
 
 
 def slot(text, size=16):
