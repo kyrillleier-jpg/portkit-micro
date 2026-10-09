@@ -329,3 +329,17 @@ pkB: Auswahl-Erkennung und Pads-Eingabe-Wrapper entfernt (nur noch Buttons). Wae
 beim Platzieren Kachel-Adressen + Namen (ohne Endung, 7 Zeichen) der Seite, unbenutzte Fusszeile eingeblendet mit
 "Pads 1-8"/"Pads 9-16" und Befehl PAGE_CMD. patch.py verweigert eine cave.elf, die aelter als src/ ist (ein
 fehlgeschlagener Build hatte ein Image mit alter Cave erzeugt; verworfen, nicht ausgeliefert). 36 Checks gruen.
+
+## Hardware-Test pkB und Build pkC (2026-10-09)
+
+pkB am Geraet (Foto): Waehler-Fusszeile "Pads 9-16" sichtbar und schaltet, aber zu gross; Namen zu breit; Encoder auf
+Seite 2 ohne Wirkung; Markierung des Samples im Waehler fehlt auf Seite 2.
+Encoder: Pad-Auswahl per Encoder = 0x0807C9FC (Werte 0x64/0x65) → 0x08076CEC(out, app, Auswahl, Richtung): sucht die
+Auswahl in den ersten 8 Eintraegen der Tabelle 0x24013C30 (16 Pads zeilenweise, gefuellt von 0x0807FF90) und geht
+weiter; Auswahl auf Seite 2 nicht gefunden → Pad auf Seite 1. pkC: padpages_step an 0x0807CA30 / 0x0807CA56 (innerhalb
+der Seite, gleiche Reihenfolge; auf Seite 0 bitgleich mit Stock, im Test mit echtem Tabellen-Init geprueft).
+UI-Manager: Zeiger in 0x24000DC8 (Heap, 0x08041276), Container +0x280, aktueller Bildschirm Container +0x34.
+Pad-Waehler: Besitzer verstecken ihn im Ctor (+0x30 = 1), Elternteil = Besitzer-Bildschirm. pkC: Linkspfeil blaettert,
+wenn ein Waehler des aktuellen Bildschirms offen ist (sonst Stock "zurueck"); Fusszeile 22 px, nicht klickbar; Namen 5
+Zeichen; Markieren-Aufrufe der Besitzer (7 Stellen, 0x080732D6) gemerkt und nach dem Blaettern neu markiert.
+43 Checks gruen.

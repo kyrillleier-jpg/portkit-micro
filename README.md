@@ -11,9 +11,9 @@ bitbox micro, Firmware 2.3.4. Keine Firmware in diesem Repo: Der Patcher arbeite
 | 24-dB-SVF mit Drive auf Res (ersetzt den Pad-Biquad) | durch Emulation bestaetigt, nicht am Geraet |
 | Machine-Drive (Saturation als Wandler-Eingang) | nicht portiert (Micro hat keinen Saturation-Parameter) |
 | Fidelity auch auf der Pad-Seite von Clip, Slicer, Granular (`patches/pages.py`) | durch Emulation bestaetigt, nicht am Geraet |
-| Pads 9-16 als zweite Seite des Pad-Rasters (`patches/padpages.py`), Umschalten nur per Button: Pads = Linkspfeil, Mixer = Feld oben links, Effects = erneuter Druck auf die gewaehlte Zelle DLY/RVB, Pad-Waehler = Fusszeile "Pads 1-8"/"Pads 9-16"; Anzeige in der Kopfzeile bzw. im Feld; Pad-Waehler zeigt die Pad-Namen | pkA am Geraet: Seiten, Starten, Balken richtig; pkB: kein Blaettern per Encoder, Fusszeile + Namen im Waehler, nicht am Geraet |
+| Pads 9-16 als zweite Seite des Pad-Rasters (`patches/padpages.py`), Umschalten nur per Button: Pads = Linkspfeil, Mixer = Feld oben links, Effects = erneuter Druck auf die gewaehlte Zelle DLY/RVB, Pad-Waehler = Linkspfeil (Anzeige in schmaler Fusszeile, Pad-Namen 5 Zeichen); Encoder waehlt innerhalb der Seite | pkB am Geraet: Seiten und Waehler gehen; pkC: Encoder auf Seite 2, Waehler-Feinschliff, nicht am Geraet |
 
-Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkB`.
+Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkC`.
 
 ## Bauen
 

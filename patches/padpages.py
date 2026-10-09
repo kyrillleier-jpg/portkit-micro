@@ -34,10 +34,22 @@ HOOKS = [
     (0x0808747E, 0x080733B4, "ctor_picker"),
     (0x08090BF0, 0x080733B4, "ctor_picker"),
     (0x080922DC, 0x080733B4, "ctor_picker"),
+    # encoder pad stepping: within the current page
+    (0x0807CA30, 0x08076CEC, "padpages_step"),
+    (0x0807CA56, 0x08076CEC, "padpages_step"),
+    # owners' "mark selected" in their picker: remembered for re-marking after a page switch
+    (0x0806C7BE, 0x080732D6, "padpages_picker_select"),
+    (0x0806E5F8, 0x080732D6, "padpages_picker_select"),
+    (0x080715B0, 0x080732D6, "padpages_picker_select"),
+    (0x080733AE, 0x080732D6, "padpages_picker_select"),
+    (0x080823BC, 0x080732D6, "padpages_picker_select"),
+    (0x08087230, 0x080732D6, "padpages_picker_select"),
+    (0x08090A6C, 0x080732D6, "padpages_picker_select"),
     # picker placing: its last set_rect (the footer's), then tiles / names / footer brought to the page
     (0x08073564, 0x0805CB36, "padpages_picker_place"),
 ]
-EXCLUSIVE = {0x080862A4, 0x08086478, 0x08084034, 0x08084138, 0x08083E40, 0x080696E0, 0x080866B0, 0x080733B4}
+EXCLUSIVE = {0x080862A4, 0x08086478, 0x08084034, 0x08084138, 0x08083E40, 0x080696E0, 0x080866B0, 0x080733B4,
+             0x08076CEC, 0x080732D6}
 
 # (site, stock instruction bytes, cave symbol): a 4-byte instruction in a function body becomes a BL to a thunk.
 THUNKS = [

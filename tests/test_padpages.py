@@ -282,7 +282,9 @@ check("selection changes (encoder, other page) never switch the page", page() ==
 
 e.w16(0x24013CB0 + 0x14, 0x02)
 del updates[:], posts[:]
-e.call(SYM["padpages_left"], 0x24013CB0)   # a page button
+btn = e.new(0x8000)
+e.w8(btn + 0x7FE4, 2)                      # the button handler's object: Pads screen shown
+e.call(SYM["padpages_left"], btn)          # a page button
 check("page button: page 1, pad at the same place selected (0x22) via command 0x63",
       page() == 1 and posts == [(0x63, 0x22, 0x080BEE0C)], (page(), posts))
 check("page 1: tile ids A and B = pads 9-16, D rows swapped",
@@ -421,7 +423,31 @@ r.call(0x0805CCA0, fld)                             # the text button's release:
 check(f"real click path: text button release reaches padpages_d_input and flips the page (clickable byte was {clickable})",
       r.r8(PSTATE + 4) == 1, r.r8(PSTATE + 4))
 
-# --- pad picker (real constructor, placing, footer click; allocator and pad-name lookup stubbed) -----------------------
+# --- encoder stepping (0x08076cec replaced at 0x0807ca30 / 0x0807ca56) ----------------------------------------------
+def step(fn, code, d):
+    out, sel = e.new(8), e.new(8)
+    e.w32(sel, 0x080BF4CC)
+    e.w16(sel + 4, code)
+    e.call(fn, out, 0x24013CB0, sel, d & 0xFFFFFFFF)
+    return e.r32(out), e.r16(out + 4)
+
+
+for t in (0x080751F8, 0x080BC9C8):
+    e.stub(t)
+e.call(0x0807FF90)                         # the firmware's own init of the pad order table (0x24013c30: 16 pads, rows)
+e.w8(PSTATE + 4, 0)
+same = all(step(SYM["padpages_step"], c, d) == step(0x08076CEC, c, d) for c in P0 for d in (1, -1))
+check("encoder step on page 0: identical to the stock function for all pads, both directions", same)
+e.w8(PSTATE + 4, 1)
+seq, c = [], 0x20
+for _ in range(9):
+    c = step(SYM["padpages_step"], c, 1)[1]
+    seq.append(c)
+check("encoder step on page 1: runs through pads 9-16 and wraps", seq == P1[1:] + [0x20, 0x21], [hex(x) for x in seq])
+check("encoder step on page 1 from a page-0 selection: first / last pad of page 1",
+      step(SYM["padpages_step"], 0x03, 1)[1] == 0x20 and step(SYM["padpages_step"], 0x03, -1)[1] == 0x33)
+
+# --- pad picker (real constructor and placing; allocator and pad-name lookup stubbed) -----------------------------------
 q = Emu()
 q.stub(0x08042DC0, lambda uc, a: q.new(a[0] * max(1, a[1])))
 NAMES_BY_CODE = {0x00: b"KICK01.wav", 0x21: b"LOOPLONGNAME.wav", 0x33: b"HAT.wav"}
@@ -436,42 +462,73 @@ q.mu.mem_write(pk + 4, struct.pack("<4i", 0, 0, 320, 220))
 pt = q.new(8)
 q.mu.mem_write(pt, struct.pack("<2i", 60, 200))
 q.w16(0x24013CB0 + 0x14, 0x00)
+m = q.new(8)
+q.w32(m, 0x080BF4CC)
+q.w16(m + 4, 0x12)
+q.call(SYM["padpages_picker_select"], pk, m)                 # the owner marks its pad (0x12)
 q.call(0x080734D6, pk, pt)                                    # real placing -> padpages_picker_place
 codes = lambda: [q.r16(pk + 0x34 + r * 0x2B0 + c * 0xAC + 0xA4) for r in range(2) for c in range(4)]
-check("placing on page 0: footer shown, click command PAGE_CMD, tiles pads 1-8",
-      q.r8(foot + 0x30) == 0 and q.r32(foot + 0x14) == 0x7F01 and codes() == [0, 1, 2, 3, 0x10, 0x11, 0x12, 0x13],
-      (q.r8(foot + 0x30), hex(q.r32(foot + 0x14)), codes()))
-q.call(0x0805CCA0, foot)                                      # real release of the footer -> click -> picker input
-check("footer click (real path): page 1, tiles pads 9-16, picker stays open",
-      q.r8(PSTATE + 4) == 1 and codes() == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33] and q.r8(pk + 0x30) == 0,
-      (q.r8(PSTATE + 4), [hex(c) for c in codes()], q.r8(pk + 0x30)))
-# names and footer text: capture via a stub of setText now
+frect = struct.unpack("<4i", q.mu.mem_read(foot + 4, 16))
+check("placing on page 0: footer shown as a 22-pixel strip next to the tiles, not clickable, tiles pads 1-8",
+      q.r8(foot + 0x30) == 0 and frect == (56, 42, 264, 22) and q.r8(foot + 0x9C) == 0 and q.r32(foot + 0x14) == 0x7F01
+      and codes() == [0, 1, 2, 3, 0x10, 0x11, 0x12, 0x13], (q.r8(foot + 0x30), frect, q.r8(foot + 0x9C), codes()))
+# left arrow while this picker is open on the current screen
+ui, owner = q.new(0x300), q.new(0x100)
+q.w32(0x24000DC8, ui)
+q.w32(ui + 0x280 + 0x34, owner)
+q.w32(pk + 0x2C, owner)
+q.w8(pk + 0x30, 0)
+obj = q.new(0x8000)
+q.w8(obj + 0x7FE4, 0x33)                                      # some slot screen, not Pads
+marks = []
+q.stub(0x0805D1F0, lambda uc, a: marks.append((a[0], a[1])))
+q.stub(0x080732B0, lambda uc, a: marks.append(("clear", 0)))
+r = q.call(SYM["padpages_left"], obj)
+check("left arrow with the picker open on the current screen: taken, page 1, tiles pads 9-16",
+      r == 1 and q.r8(PSTATE + 4) == 1 and codes() == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33], (r, codes()))
+check("after the switch the owner's pad (0x12, page 0) is not marked on page 1", ("clear", 0) in marks
+      and not [a for a, b in marks if a != "clear" and b], marks)
+q.w8(pk + 0x30, 1)                                            # picker closed
+r = q.call(SYM["padpages_left"], obj)
+check("left arrow with the picker closed: not taken (stock 'back')", r == 0 and q.r8(PSTATE + 4) == 1)
+q.w8(pk + 0x30, 0)
+q.w32(ui + 0x280 + 0x34, q.new(0x10))                         # another screen is current
+check("left arrow with an open picker of another screen: not taken", q.call(SYM["padpages_left"], obj) == 0)
+q.w32(ui + 0x280 + 0x34, owner)
+q.w16(m + 4, 0x31)
+q.call(SYM["padpages_picker_select"], pk, m)                 # the owner marks pad 0x31 (page 1)
+del marks[:]
+q.call(SYM["padpages_left"], obj)                             # page 0
+q.call(SYM["padpages_left"], obj)                             # page 1 again: the owner's pad is re-marked
+check("owner's marked pad is marked again after switching back to its page",
+      [a for a, b in marks if a != "clear" and b][-1:] == [pk + 0x34 + 0x2B0 + 0xAC], marks[-3:])
 seen_text = {}
 q.stub(0x0805D1DC, lambda uc, a: seen_text.__setitem__(a[0], bytes(q.mu.mem_read(a[1], 16)).split(b"\0")[0].decode()))
 q.call(0x080734D6, pk, pt)
 tiles = [pk + 0x34 + r * 0x2B0 + c * 0xAC for r in range(2) for c in range(4)]
-check("page 1 picker: tiles show pad names (no extension, 7 chars), footer 'Pads 9-16'",
-      seen_text.get(tiles[1]) == "LOOPLON" and seen_text.get(tiles[7]) == "HAT" and seen_text.get(tiles[0]) == ""
+check("page 1 picker: tiles show pad names (no extension, 5 chars), footer 'Pads 9-16'",
+      seen_text.get(tiles[1]) == "LOOPL" and seen_text.get(tiles[7]) == "HAT" and seen_text.get(tiles[0]) == ""
       and seen_text.get(foot) == "Pads 9-16", {hex(k): v for k, v in seen_text.items()})
-q.w32(pk + 0x5A8, 0x18C)                                      # an owner that uses the footer ("Pads" / "Seq")
-q.w32(foot + 0x14, 0x18C)
+q.w32(foot + 0x14, 0x18C)                                     # an owner that uses the footer ("Pads" / "Seq")
 seen_text.clear()
 q.call(0x080734D6, pk, pt)
-check("picker whose owner uses the footer: footer left alone", q.r32(foot + 0x14) == 0x18C and foot not in seen_text)
-marks = []
+check("picker whose owner uses the footer: footer left alone (text, size)", q.r32(foot + 0x14) == 0x18C
+      and foot not in seen_text and struct.unpack("<4i", q.mu.mem_read(foot + 4, 16)) == (56, 0, 264, 64))
 q.stub(0x0805D1F0, lambda uc, a: marks.append((a[0], a[1])))
-m = q.new(8)
-q.w32(m, 0x080BF4CC)
-q.w16(m + 4, 0x32)
-q.call(0x080732D6, pk, m)
-q.w16(m + 4, 0x02)
-q.call(0x080732D6, pk, m)
+del marks[:]
+q.unhook = None
+pm = q.new(8)
+q.w32(pm, 0x080BF4CC)
+q.w16(pm + 4, 0x32)
+q.call(0x080732D6, pk, pm)
+q.w16(pm + 4, 0x02)
+q.call(0x080732D6, pk, pm)
 check("picker 'mark selected' on page 1: pad 0x32 marks tile row 1 col 2, pad 0x02 (page 0) marks nothing",
-      marks == [(pk + 0x34 + 0x2B0 + 2 * 0xAC, 1)], [(hex(a), b) for a, b in marks])
+      marks == [(pk + 0x34 + 0x2B0 + 2 * 0xAC, 1)], [(hex(a) if isinstance(a, int) else a, b) for a, b in marks])
 plays = []
 q.stub(0x0805D304, lambda uc, a: plays.append((a[0], a[1])))
-q.w16(m + 4, 0x31)
-q.call(0x08073312, pk, m)
+q.w16(pm + 4, 0x31)
+q.call(0x08073312, pk, pm)
 check("picker 'mark playing' on page 1: only the tile of pad 0x31 (row 1 col 1)",
       [a for a, b in plays if b] == [pk + 0x34 + 0x2B0 + 0xAC] and len(plays) == 8, plays)
 
