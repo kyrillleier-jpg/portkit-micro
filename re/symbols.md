@@ -151,3 +151,53 @@ Slice, Density, Pad Mode), Typ 0x45 = Boot-Default (36 IDs, Interp ja, Slice/Den
 Zellen vom Typ 3 / 0x45 als Pads → Interp ist fuer alle Pad-Modi speicherbar. `patches/pages.py` traegt 0xD2 hinter
 Excl Group in Clip/Slicer/Granular ein (beide Varianten). Status: durch Emulation bestaetigt (Tabelleninhalt), nicht am Geraet.
 Hinweis: "Poly Mode:" ist bei Sample 0x82, bei Clip/Slicer 0x83 (gleiches Label).
+
+## UI: Pad-Raster (Untersuchung 16 Pads, 2026-10-09)
+
+Panel 240x320 nativ (CASET 0..0xEF, RASET 0..0x13F, 0x080462EA..), UI quer 320 breit; Inhaltsbereich {0,0,320,221}
+(0x08070828). Touch GT911, Punkte bei 0x0804659E (Micro-Patcher "Flip UI"). Widgets mit vtable, setRect = vt+0x20 mit
+{x, y, w, h} (int32) auf dem Stack, Kind anhaengen = 0x08060D30. Katalog aller setRect-Aufrufe: `tools/rects.py`.
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| 0x080866B0 (Schleife 0x08086974..0x080869D8) | Pad-Raster | 2 Zeilen (`cmp sb,#2`) x 4 Spalten (`cmp r5,#4`), Kachel {1+80*col, 1+74*row, 78, 72}, Widget-Abstand 0x1A0, Kachel-ID (+0x38) = row<<4 \| col; Kacheln liegen im Bildschirm-Objekt, danach weitere Member ab +0xD34 | vermutet |
+| 0x08083E40 | weiteres 4er-Kachelraster 78x72, Abstand 0x1A0 | Bildschirm unbekannt | vermutet |
+| 0x08085664 | 4 Spalten x 2 Elemente (Schleife `sb` += 2 bis 8), Widget-Klasse mit 0x08085E34, Abstand 0x28C | Kandidat Send-/Mixer-Ansicht | vermutet |
+| 0x080696E0 | Kacheln 78x72 bei y=75 | Bildschirm unbekannt | vermutet |
+| 0x080860DC | Menue mit 8 grossen Buttons 160x66 (Texte "Pads", "FX", Icons) | kein Pad-Raster | vermutet |
+| app+0x7FE4 | aktueller Bildschirm: 2 = Pads, 0x2E/0x2F = Mixer, 0x30 = FX (0x080769E0) | | vermutet |
+
+Folgerung: Die 8 Micro-Pads sind Zeilen 0-1 des 4x4-Rasters (App-Code row<<4|col, Engine-ID row<<8|col). Fuer 16 Pads
+muessen die Zeilen 2-3 als Kacheln dazukommen. Problem: Die 8 Kachel-Widgets sind fest ins Bildschirm-Objekt eingebettet
+(danach folgen weitere Member), d. h. 8 zusaetzliche Widgets brauchen eigenen Speicher, und jeder Code, der ueber die
+Kacheln iteriert (Zeichnen, Beschriften, Auswahl, Touch), muss sie mit abdecken.
+
+## Seiten-Variante (Pads 9-16 als Seite 2), Analyse 2026-10-09
+
+Kachel-Widget (Button-Klasse, Ctor 0x0805DB34, vtable 0x080BFDC0, Rect +4..+0x10, **Pad-Adresse u16 +0x38**).
+Pads-Bildschirm: Ctor 0x080866B0 (aufgerufen aus 0x08085130), vtable 0x080C647C; 8 Kacheln bei +0x34 (Zeile 0x680,
+Spalte 0x1A0), danach 5 weitere Buttons +0xD34..+0x1554; ausgewaehltes Pad (Kopie) bei +0x1BD4 / +0x1BDC.
+
+| Micro | Was | Befund |
+|---|---|---|
+| 0x080863A0 (vt+0x34) | Benachrichtigungen | 0x66: Pad geaendert (Adresse msg+8, Bits 8-12 muessen 0 sein) → 0x080862A4; **0x67: alles neu, feste Adressen 0x00-0x03, 0x10-0x13** → 0x080862A4; 0x112: Auswahl geaendert → +0x1BDC, Markierung per Vergleich mit Button-ID; 0x32: Encoder-Anzeige |
+| 0x080865E4 (vt+0x30) | Eingaben | Ereignis 3 (Touch auf Kachel, ID msg+8) → 0x08086478 bzw. Befehl 0x111 (Bits 8-12 == 3); 0x3C/0x3D (Knoepfe) → Befehl 0x6E mit +0x1BD4 |
+| 0x0807E3B8 | App-Befehls-Dispatcher (tbh, Befehl-3) | 0x111 → 0x0807B20C SetSelectedPad (app+0x28 = Adresse, Nachricht 0x112); 0x6E → 0x0807D358 (allg. Parameter-Knopf) |
+| 0x0807B20C | SetSelectedPad | einziger Aufrufer 0x0807E744 (Dispatcher) |
+
+Rueckrechnungen Adresse → Kachel ohne Grenzpruefung (Zeile 2/3 wuerde hinter das Kachel-Array schreiben):
+0x08084034, 0x08084154 (vtable 0x080C6378), 0x080862A4, 0x08086478 (Pads-Umfeld); 0x080853FC (Mixer/FX, Widget 0x28C);
+0x08064B04, 0x080654A8 (vtable 0x080C04C0), 0x0806580C (vtable 0x080C048C), 0x08069268 (anderer Raster-Bildschirm).
+
+Design: globales Seiten-Byte; Kachel-IDs tragen die echte Adresse (beim Seitenwechsel neu gesetzt); an jeder
+Rueckrechnung ersetzt ein Thunk `ubfx rZeile, rAdr, #4, #4` durch Zeile − 2·Seite oder springt bei Pad nicht auf der
+Seite zum Funktionsende; 0x67-Schleife mit Seiten-Offset; Seitenwechsel bei Auswahl (0x112) eines Pads der anderen Seite.
+Offen: wo die Knopf-Auswahl das naechste Pad bestimmt und ob dort auf 8 begrenzt wird (nicht in 0x0807D358 gefunden).
+
+Nachtrag Encoder (2026-10-09): Am Geraet springt die Encoder-Auswahl nach Pad 8 auf Pad 1 (Geraet). Nicht gefunden:
+kein 0x111 ausser Touch (0x08086678), keine Index-Tabelle, nicht in 0x0807D358 (Sonderfaelle 0x7D/0xBE/0x1C5 sind Rec
+Input / Mon Output). Button (0x0805D44C): Touch-Down → Ereignis 3 mit ID, Touch-Up → Ereignis 4. Pads-Bildschirm
+behandelt Encoder 0x3C/0x3D nur bei Flag +0x1BE0, sonst "nicht behandelt" (→ uebergeordnete Ebene).
+UI-Manager (vtable 0x080C6384, Handler 0x08084A70): beim Bildschirmwechsel 0x63, 0x67 (alles neu), 0x112 (Auswahl)
+an den neuen Bildschirm (0x08084FA0 / 0x08084FF8).
+Ausweg: Seitenwechsel im 0x112-Handler erkennen (Auswahl springt von letztem auf erstes Pad der Seite, nicht durch Touch).
