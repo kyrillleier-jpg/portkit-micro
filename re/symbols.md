@@ -112,3 +112,17 @@ LP/HP des SVF, alle Machine-Modi, Kernels ohne Machine bitgleich mit Stock, Voic
 durch. Status: **durch Emulation bestaetigt**, nicht hardware-verified.
 Emulator-Hinweis: Unicorn 2.1 hat auf M-Profil kein Double (Stock-Res-Kurve nutzt `vcvt.f64.f32`) → Tests laufen wie
 blackbox-mod/emu.py mit `UC_CPU_ARM_MAX` im Thumb-Modus.
+
+## 16 Pads? (Untersuchung 2026-10-09)
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| 0x08095CE8 (Schleife 0x08096066..0x08096142) | Engine-Graph-Aufbau | 16 Pad-Zellen (Node-Typ 0x4C, ID `row<<8\|col`, row/col 0..3), je mit Sample-Engine (Typ 0x48, vtable 0x080DE300), beide in den Graphen gehaengt | vermutet |
+| 0x080B3650 (vtable +0x0C) → 0x080B10B8 | Block-Verarbeitung Klasse A (Klasse B: 0x080B8148 → 0x080B74EC) | Graph verarbeitet jede eingehaengte Zelle | vermutet |
+| 0x08080EC4 | Preset-Leser (`cell` row/column/layer) | Pad-Zellen (Typ 3 / 0x45, layer 0): Record = Basis + row*0xF0 + col*0x30, **keine** Grenze auf 8 Pads | vermutet |
+| 0x08080AF4 | Preset-Writer | laeuft ueber 4 Zeilen x 5 Spalten der App-Records, ueberspringt leere | vermutet |
+| – | UI: Touch/Anzeige → (row, col) | kein Muster `i>>2 / i&3` gefunden; Zuordnung vermutlich tabellen- oder koordinatenbasiert | offen |
+
+Folgerung: Engine, App-Records und Preset-Format sind fuer 16 Pads ausgelegt (Framework der Blackbox). Die Grenze 8 sitzt
+vermutlich nur in der Bedienung (Touch, Anzeige, Pad-Auswahl) und bei MIDI (8 Kanaele laut Micro-Patcher). Nicht geprueft:
+CPU-Reserve bei 16 spielenden Pads, Speicher fuer 16 geladene Samples.
