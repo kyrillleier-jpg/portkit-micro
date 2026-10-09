@@ -271,3 +271,17 @@ Effects (A): Foto bestaetigt DLY / RVB oben (UI gedreht), Send-Anzeigen dazwisch
 Stelle per 0x63), sonst Stock (0x080865E4). Anzeige "P1" / "P2": passives Text-Widget {124,175,73,20} ueber der Mitte
 der Send-Anzeigen ({122,149,37,72}, {161,149,37,72}). Zustand jetzt 0x28 Bytes (ind +0x18, ind2 +0x1C, ind3 +0x20,
 tvt +0x24). Unicorn inkl. echter Effects-/Pads-/Mixer-Konstruktoren: 36 Checks gruen.
+
+## Hardware-Test pk7 und Build pk8 (2026-10-09)
+
+pk7 am Geraet: Blaettern funktioniert. Fehler: Pads-Anzeige unsichtbar, Effects-Anzeige "verschluckt" (beides
+eigene Text-Widgets ueber Nachbarn, die sich laufend neu zeichnen), Mixer-Feld zeigt die Seite, leuchtet beim Antippen
+auf, schaltet aber nicht.
+Ursache Mixer: Text-Buttons behandeln Touch in vt+0x10 (druecken, Hervorhebung) / vt+0x18 (loslassen, 0x0805CCA0) und
+melden den Klick per 0x0805CC74 als **Ereignis 2 mit dem Befehl aus +0x14** (Feld +0x0C) an den Elternteil (Keys 0xBE,
+Stop 0xF1; klickbar nur mit +0x9C != 0). vt+0x30 bleibt dabei unbenutzt.
+pk8: Mixer-Feld +0x14 = PAGE_CMD 0x7F01, Wrapper um Mixer vt+0x30 (0x080C0690 → padpages_d_input) faengt Ereignis 2 /
+0x7F01 ab. vtable-Kopie und eigene Widgets entfernt. Kopfzeile: die snprintf-Aufrufe fuer "Pads" (0x08076AD4) und "FX"
+(0x08076AF0) im Titel-Bau 0x080769E0 → padpages_title ("Pads 1-8" / "FX 9-16"; snprintf 0x080BCD58).
+Unicorn: echter Klickweg (echter Mixer-Ctor, echte Loslass-Methode → Ereignis 2 → Wrapper) schaltet um; Titel mit echtem
+snprintf. 32 Checks gruen.

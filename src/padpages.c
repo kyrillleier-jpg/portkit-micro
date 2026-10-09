@@ -15,15 +15,15 @@
  * Screens (identified from their constructors' layouts, tools/emu_layout.py): A = Effects (8 tiles, DLY / RVB cells,
  * send meters; pk3 wrongly took it for the Pads screen), B = Pads (8 tiles, Keys / Stop; selection arrives as
  * notification 0x63, not 0x112), D = probably the Mixer (8 visible of 16 tiles, four buttons below).
- * The left arrow button (no function on the Pads screen in stock) toggles the page there. The page shows, and toggles
- * on touch, in two text widgets: one of our own on the Pads screen (empty middle of its Keys / Stop panel) and one of
- * the Mixer's four empty text buttons (the one at the top left on the device; the UI is turned by 180 degrees there).
- * Text widgets ignore touches (their input method is the base one), so the toggles get a RAM copy of the text widget
- * vtable with the input method replaced.
+ * The left arrow button (no function on the Pads screen in stock) toggles the page there. The page shows in the title
+ * bar on the Pads and Effects screens ("Pads 1-8", "FX 9-16"; the title's snprintf calls in 0x080769e0 are replaced).
+ * On the Mixer, one of its four empty text buttons (top left on the device; the UI is turned by 180 degrees) shows the
+ * page and toggles it: a text button reports its click to its screen as event 2 carrying the command id at +0x14
+ * (0x0805cc74); that field gets PAGE_CMD and the Mixer's input handler is wrapped. pk6 / pk7 put our own text widgets
+ * over the Pads panel and the send meters; those were overdrawn by their live neighbours and are gone.
  * Selecting a pad is app command 0x63 (0x08075984: app + 0x14 = selected pad, notification 0x63); 0x111 selects an
  * effect cell (app + 0x28) and was wrongly used up to pk5.
- * On the Effects screen a second touch on the already selected effect cell (DLY / RVB, app + 0x28) toggles the page,
- * shown as "P1" / "P2" over the middle of its two send meters.
+ * On the Effects screen a second touch on the already selected effect cell (DLY / RVB, app + 0x28) toggles the page.
  * Not in this build: MIDI and gate inputs for pads 9-16.
  */
 #include <stdint.h>
@@ -64,26 +64,18 @@ typedef int (*vis_fn)(void *scr, const void *msg);
 #define fw_d_update      ((scr_fn)FN(0x08069268))   /* screen D: update one tile (rows 0-3, 16 tiles) */
 #define fw_post_cmd      ((scr_fn)FN(0x08060df8))   /* widget: pass a command up to the app */
 
-typedef void *(*alloc_fn)(unsigned size, unsigned n);
-typedef void (*obj_fn)(void *obj);
 typedef void (*text_fn)(void *w, const char *text);
-typedef void (*child_fn)(void *parent, void *child);
-struct rect {
-    int32_t x, y, w, h;
-};
-typedef void (*rect_fn)(void *w, const struct rect *r);
-#define fw_alloc      ((alloc_fn)FN(0x08042dc0))     /* the firmware's allocator, as the screens use it */
-#define fw_text_ctor  ((obj_fn)FN(0x0805d124))       /* text widget, as "Keys" / "Stop" (0xa0 bytes) */
 #define fw_set_text   ((text_fn)FN(0x0805d1dc))      /* copies the text, then relayouts / redraws (vt+0x3c) */
-#define fw_add_child  ((child_fn)FN(0x08060d30))
-#define TEXT_SIZE     0xa0
 #define APP           ((volatile uint8_t *)0x24013cb0u)   /* the app object (as in filter.c) */
 #define APP_SELECTED  0x14                            /* app + 0x14: selected pad (0x08075984) */
 #define APP_FX_CELL   0x28                            /* app + 0x28: selected effect cell (0x0807b20c) */
 #define TEXT_VT       0x080bfc9cu                     /* text widget vtable */
-#define TEXT_VT_SIZE  0x80
-#define fw_text_input ((vis_fn)FN(0x08060cf2))        /* base input method: ignores everything (returns 1) */
+#define TEXT_CMD      0x14                            /* text widget: command id its click reports (event 2, +0xc) */
+#define PAGE_CMD      0x7f01u                         /* our command id: no app command (the dispatcher ends at 0x181) */
 #define MIXER_TOGGLE  0x2ae8                          /* Mixer screen: text button {161, 186, 158, 35} */
+#define fw_d_input    ((vis_fn)FN(0x080691b0))        /* Mixer screen: input events (vtable +0x30) */
+typedef int (*snprintf_fn)(char *buf, unsigned size, const char *fmt, ...);
+#define fw_snprintf   ((snprintf_fn)FN(0x080bcd58))
 
 /* State above the stack top, next to Fidelity's PARK (0x2406c100..0x2406c10b); MPU device memory, aligned accesses. */
 struct pstate {
@@ -95,16 +87,13 @@ struct pstate {
     uint16_t last_sel;           /* last selection the Pads screen saw */
     uint16_t pad1;
     uint8_t *inst[3];            /* screen objects: A (Effects), B (Pads), D (Mixer?) */
-    uint8_t *ind;                /* page indicator / toggle on the Pads screen */
-    uint8_t *ind2;               /* ... on the Mixer screen */
-    uint8_t *ind3;               /* page label ("P1" / "P2") on the Effects screen */
-    uint32_t *tvt;               /* RAM copy of the text widget vtable with our input method */
+    uint8_t *ind2;               /* page label / toggle on the Mixer screen */
 };
 #define ST     ((volatile struct pstate *)0x2406c110u)
 #define PMAGIC 0x50414745u       /* "PAGE" */
 enum { SCR_A, SCR_B, SCR_D };
 
-_Static_assert(sizeof(struct pstate) == 0x28, "thunks read page at +4");
+_Static_assert(sizeof(struct pstate) == 0x1c, "thunks read page at +4");
 
 static unsigned page(void)
 {
@@ -130,72 +119,14 @@ static const char *page_label(void)
 
 static void toggle(void *from);
 
-/* Input method of the toggles: a touch (event 1) flips the page; everything else as a plain text widget. */
-int padpages_toggle_input(void *w, const struct note *ev)
-{
-    if (ev->id == 1) {
-        toggle(w);
-        return 0;
-    }
-    return fw_text_input(w, ev);
-}
-
-/* Give a text widget the toggle behaviour: point it at a RAM copy of the text widget vtable with +0x30 replaced. */
-static void make_toggle(uint8_t *w)
-{
-    if (!ST->tvt) {
-        uint32_t *vt = fw_alloc(TEXT_VT_SIZE, 1);
-        if (!vt)
-            return;
-        const uint32_t *src = (const uint32_t *)TEXT_VT;
-        for (unsigned i = 0; i < TEXT_VT_SIZE / 4; i++)
-            vt[i] = src[i];
-        vt[0x30 / 4] = (uint32_t)padpages_toggle_input;
-        ST->tvt = vt;
-    }
-    *(uint32_t **)w = ST->tvt;
-}
-
-/* The indicator: a text widget like "Keys", on the Pads screen over the middle of its Keys / Stop panel
-   ({1, 149, 318, 72}; Keys 78 wide on the left, Stop on the right, the middle is empty). */
-static void make_indicator(uint8_t *scr)
-{
-    uint8_t *w = fw_alloc(TEXT_SIZE, 1);
-    if (!w)
-        return;
-    fw_text_ctor(w);
-    struct rect r = {100, 165, 120, 40};
-    rect_fn set_rect = (rect_fn)(*(uint32_t *const *)w)[0x20 / 4];
-    set_rect(w, &r);
-    fw_add_child(scr, w);
-    make_toggle(w);
-    ST->ind = w;
-    fw_set_text(w, page_label());
-}
-
-/* The Effects screen's label: a plain text widget over the middle of its send meters ({122, 149, 37, 72} and
-   {161, 149, 37, 72}); passive, the toggle there is the selected effect cell. */
-static void make_fx_label(uint8_t *scr)
-{
-    uint8_t *w = fw_alloc(TEXT_SIZE, 1);
-    if (!w)
-        return;
-    fw_text_ctor(w);
-    struct rect r = {124, 175, 73, 20};
-    rect_fn set_rect = (rect_fn)(*(uint32_t *const *)w)[0x20 / 4];
-    set_rect(w, &r);
-    fw_add_child(scr, w);
-    ST->ind3 = w;
-    fw_set_text(w, page() ? "P2" : "P1");
-}
-
-/* The Mixer's toggle: one of its four empty text buttons (only if it is the text widget we expect). */
+/* The Mixer's toggle: one of its four empty text buttons (only if it is the text widget we expect). Its click now
+   reports PAGE_CMD, which padpages_d_input takes. */
 static void make_mixer_toggle(uint8_t *scr)
 {
     uint8_t *w = scr + MIXER_TOGGLE;
     if (*(uint32_t *)w != TEXT_VT)
         return;
-    make_toggle(w);
+    *(uint32_t *)(w + TEXT_CMD) = PAGE_CMD;
     ST->ind2 = w;
     fw_set_text(w, page_label());
 }
@@ -205,8 +136,7 @@ void padpages_ctor(unsigned which, uint8_t *scr)
 {
     if (ST->magic != PMAGIC) {
         ST->inst[0] = ST->inst[1] = ST->inst[2] = 0;
-        ST->ind = ST->ind2 = ST->ind3 = 0;
-        ST->tvt = 0;
+        ST->ind2 = 0;
         ST->magic = PMAGIC;
     }
     ST->page = 0;                /* a fresh screen has the stock ids: pads 1-8 */
@@ -215,12 +145,8 @@ void padpages_ctor(unsigned which, uint8_t *scr)
     ST->last_sel = 0xffff;
     if (which < 3)
         ST->inst[which] = scr;
-    if (which == SCR_B)
-        make_indicator(scr);
     if (which == SCR_D)
         make_mixer_toggle(scr);
-    if (which == SCR_A)
-        make_fx_label(scr);
 }
 
 /* --- guards: replace the stock guarded entries at their call sites ------------------------------------------------ */
@@ -292,12 +218,8 @@ static void set_page(unsigned p)
     refresh(SCR_A);
     refresh(SCR_B);
     refresh(SCR_D);
-    if (ST->ind)
-        fw_set_text(ST->ind, page_label());
     if (ST->ind2)
         fw_set_text(ST->ind2, page_label());
-    if (ST->ind3)
-        fw_set_text(ST->ind3, page() ? "P2" : "P1");
 }
 
 static void select_pad(void *scr, unsigned code)
@@ -396,4 +318,20 @@ void padpages_left(uint8_t *app)
 {
     (void)app;
     toggle(ST->inst[SCR_B]);
+}
+
+/* --- Mixer (D): its toggle's click (event 2 with PAGE_CMD) --------------------------------------------------------- */
+int padpages_d_input(void *scr, const struct note *n)
+{
+    if (n->id == 2 && *(const uint32_t *)((const uint8_t *)n + 0xc) == PAGE_CMD) {
+        toggle(scr);
+        return 0;
+    }
+    return fw_d_input(scr, n);
+}
+
+/* --- title bar: replaces snprintf(buf, 0x18, "Pads") / ("FX") in 0x080769e0 --------------------------------------- */
+int padpages_title(char *buf, unsigned size, const char *name)
+{
+    return fw_snprintf(buf, size, "%s %s", name, page() ? "9-16" : "1-8");
 }

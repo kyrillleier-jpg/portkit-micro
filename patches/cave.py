@@ -5,7 +5,7 @@ import os
 
 from thumb import ROOT, STOCK_END
 
-BUILD = b"7"    # 1 = Fidelity + 24 dB SVF (no machine drive), 2 = + Fidelity on Clip / Slicer / Granular pages, 3 = + pad pages (pads 9-16), 4 = page switch on the real Pads screen (0x63), 5 = left arrow pages, page indicator on Pads, 6 = select via 0x63, touch toggles on Pads and Mixer, 7 = Effects: selected cell toggles, P1/P2
+BUILD = b"8"    # 1 = Fidelity + 24 dB SVF (no machine drive), 2 = + Fidelity on Clip / Slicer / Granular pages, 3 = + pad pages (pads 9-16), 4 = page switch on the real Pads screen (0x63), 5 = left arrow pages, page indicator on Pads, 6 = select via 0x63, touch toggles on Pads and Mixer, 7 = Effects: selected cell toggles, P1/P2, 8 = page in the title (Pads, FX), Mixer toggle via click command
 
 
 def slot(text, size=16):

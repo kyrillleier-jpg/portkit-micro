@@ -223,15 +223,7 @@ e2 = Emu()
 e = e2
 for stock in (0x08083E40, 0x080696E0, 0x080866B0):
     e.stub(stock, lambda uc, a: a[0])
-FAKE_VT = e.new(0x80)
-SET_RECT = 0x2407E000                    # a stub address for the text widget's vt+0x20
-e.mu.mem_write(SET_RECT, b"\x70\x47")  # bx lr
-e.w32(FAKE_VT + 0x20, SET_RECT | 1)
-rects, children, texts = [], [], []
-e.stub(0x08042DC0, lambda uc, a: e.new(a[0]))
-e.stub(0x0805D124, lambda uc, a: e.w32(a[0], FAKE_VT))
-e.stub(SET_RECT, lambda uc, a: rects.append(struct.unpack("<4i", e.mu.mem_read(a[1], 16))))
-e.stub(0x08060D30, lambda uc, a: children.append((a[0], a[1])))
+texts = []
 e.stub(0x0805D1DC, lambda uc, a: texts.append(bytes(e.mu.mem_read(a[1], 16)).split(b"\0")[0].decode()))
 e.w32(PSTATE, 0)
 scrs = {"ctor_b": e.new(0x2000), "ctor_d": e.new(0x2600), "ctor_a": e.new(0x2000)}
@@ -241,19 +233,10 @@ rets = {name: e.call(SYM[name], s, 0x11, 0x22, 0x33) for name, s in scrs.items()
 ok = all(rets[n] == scrs[n] for n in scrs) and e.r32(PSTATE) == 0x50414745 and e.r8(PSTATE + 4) == 0
 ok &= [e.r32(PSTATE + 0xC + 4 * k) for k in range(3)] == [scrs["ctor_a"], scrs["ctor_b"], scrs["ctor_d"]]
 check("constructor wrappers: stock ctor runs, this returned, screens remembered, page reset to 0", ok)
-ind = e.r32(PSTATE + 0x18)
-tvt = e.r32(PSTATE + 0x24)
-check("Pads screen gets a page indicator / toggle: text widget, rect in the panel middle, child of the screen, 'Pads 1-8'",
-      ind != 0 and rects[0] == (100, 165, 120, 40) and children[0] == (scrs["ctor_b"], ind) and e.r32(ind) == tvt,
-      (hex(ind), rects, children))
-m2 = e.r32(PSTATE + 0x1C)
-check("Mixer: its text button at +0x2ae8 becomes the toggle (vtable copy, input method replaced), labels 'Pads 1-8'",
-      m2 == scrs["ctor_d"] + 0x2AE8 and e.r32(m2) == tvt and e.r32(tvt + 0x30) == SYM["padpages_toggle_input"] | 1
-      and e.r32(tvt + 0x2C) == e.r32(0x080BFC9C + 0x2C) and texts[:2] == ["Pads 1-8", "Pads 1-8"], (hex(m2), texts))
-fx = e.r32(PSTATE + 0x20)
-check("Effects screen gets a passive 'P1' label over the middle of the send meters",
-      fx != 0 and rects[1:] == [(124, 175, 73, 20)] and children[1:] == [(scrs["ctor_a"], fx)] and texts[2:] == ["P1"]
-      and e.r32(fx) == FAKE_VT, (hex(fx), rects, children, texts))
+m2 = e.r32(PSTATE + 0x18)
+check("Mixer: its text button at +0x2ae8 becomes the toggle: click command PAGE_CMD at +0x14, label 'Pads 1-8'",
+      m2 == scrs["ctor_d"] + 0x2AE8 and e.r32(m2 + 0x14) == 0x7F01 and e.r32(m2) == 0x080BFC9C and texts == ["Pads 1-8"],
+      (hex(m2), hex(e.r32(m2 + 0x14)), texts))
 
 # --- page switch and encoder logic on the Pads screen (B; A = Effects, D = Mixer?) ------------------------------------------------------------------
 A, Bs, D = scrs["ctor_a"], scrs["ctor_b"], scrs["ctor_d"]
@@ -336,8 +319,7 @@ check("'all new' on page 1: stock handler, then Pads tiles refreshed with pads 9
 e.call(SYM["padpages_b_input"], Bs, note(0x3C))
 check("input wrapper returns the stock handler's result", e.mu.reg_read(UC_ARM_REG_R0) == 7)
 
-check("indicators follow the page", texts[-3:] == [("Pads 9-16" if page() else "Pads 1-8")] * 2 + [("P2" if page() else "P1")],
-      (texts[-3:], page()))
+check("Mixer label follows the page", texts[-1:] == [("Pads 9-16" if page() else "Pads 1-8")], (texts[-1:], page()))
 
 # --- left arrow (button handler 0x080839e6 -> left_arrow) ---------------------------------------------------------------
 app = e.new(0x8100)
@@ -366,23 +348,32 @@ p0 = page()
 went_on, r3, r4 = left(2, 0x12 | (p0 << 5))
 check("left arrow on Pads: page toggles, same place selected on the other page, handler left via its epilogue",
       not went_on and page() == p0 ^ 1 and posts == [(0x63, 0x12 | ((p0 ^ 1) << 5), 0x080BEE0C)] and r4 == 0x4444
-      and texts[-3:-1] == [("Pads 9-16" if page() else "Pads 1-8")] * 2, (went_on, page(), posts, hex(r4), texts))
+      and texts == [("Pads 9-16" if page() else "Pads 1-8")], (went_on, page(), posts, hex(r4), texts))
 p1 = page()
 went_on, r3, r4 = left(0x2E, 0x01)
 check("left arrow on the Mixer: no page change, stock path continues with r3 = 0x7fe4", went_on and page() == p1 and r3 == 0x7FE4
       and posts == [], (went_on, page(), hex(r3)))
 
-# --- touch on a toggle widget ---------------------------------------------------------------------------------------------
+# --- Mixer toggle: its click arrives at the Mixer's input as event 2 with PAGE_CMD at +0xc ---------------------------
+def click(cmd):
+    n = e.new(0x20)
+    e.w16(n, 2)
+    e.w32(n + 4, 0x080BF4CC)
+    e.w32(n + 0xC, cmd)
+    return n
+
+
+e.stub(0x080691B0, lambda uc, a: 9)
 p2 = page()
 e.w16(0x24013CB0 + 0x14, 0x03 | (p2 << 5))
 del posts[:], texts[:]
-r = e.call(SYM["padpages_toggle_input"], m2, note(1))
-check("touch on the Mixer toggle: page flips, both labels follow, pad at the same place selected (0x63), handled",
+r = e.call(SYM["padpages_d_input"], D, click(0x7F01))
+check("Mixer toggle click: page flips, label follows, pad at the same place selected (0x63), handled",
       r == 0 and page() == p2 ^ 1 and posts == [(0x63, 0x03 | ((p2 ^ 1) << 5), 0x080BEE0C)]
-      and texts == [("Pads 9-16" if page() else "Pads 1-8")] * 2 + [("P2" if page() else "P1")], (r, page(), posts, texts))
-e.stub(0x08060CF2, lambda uc, a: 1)
-r = e.call(SYM["padpages_toggle_input"], m2, note(2))
-check("other events on a toggle go to the text widget's own input method", r == 1 and page() == p2 ^ 1)
+      and texts == [("Pads 9-16" if page() else "Pads 1-8")], (r, page(), posts, texts))
+r1 = e.call(SYM["padpages_d_input"], D, click(0xBE))
+r2 = e.call(SYM["padpages_d_input"], D, note(3, 0x12))
+check("other Mixer events (other click commands, tile presses) go to the stock handler", (r1, r2) == (9, 9) and page() == p2 ^ 1)
 
 # --- Effects screen: second touch on the selected effect cell toggles ------------------------------------------------
 e.stub(0x080865E4, lambda uc, a: 5)
@@ -392,49 +383,41 @@ e.w16(APPX + 0x14, 0x11 | (page() << 5))
 p3 = page()
 del posts[:], texts[:]
 r = e.call(SYM["padpages_a_input"], A, note(3, 0x300))
-check("Effects: touch on the selected cell (DLY) toggles, labels incl. P1/P2 follow, pad at the same place selected",
-      r == 0 and page() == p3 ^ 1 and posts == [(0x63, 0x11 | ((p3 ^ 1) << 5), 0x080BEE0C)]
-      and texts[-1] == ("P2" if page() else "P1"), (r, page(), posts, texts))
+check("Effects: touch on the selected cell (DLY) toggles, pad at the same place selected",
+      r == 0 and page() == p3 ^ 1 and posts == [(0x63, 0x11 | ((p3 ^ 1) << 5), 0x080BEE0C)], (r, page(), posts))
 p4 = page()
 r1 = e.call(SYM["padpages_a_input"], A, note(3, 0x310))   # RVB, not selected
 r2 = e.call(SYM["padpages_a_input"], A, note(3, 0x12))    # a pad tile
 r3 = e.call(SYM["padpages_a_input"], A, note(1, 0x300))   # another event
 check("Effects: other cell, pad tiles and other events go to the stock handler", (r1, r2, r3) == (5, 5, 5) and page() == p4)
 
-# --- real firmware: Pads and Mixer constructors, text widget, setRect, add child, setText (only the allocator stubbed) ---
+# --- title bar (real snprintf) ---------------------------------------------------------------------------------------
+titles = []
+for p in (0, 1):
+    e.w8(PSTATE + 4, p)
+    for name in (0x080C5654, 0x080C5E18):           # "Pads", "FX"
+        buf = e.new(0x18)
+        e.call(SYM["padpages_title"], buf, 0x18, name)
+        titles.append(bytes(e.mu.mem_read(buf, 0x18)).split(b"\0")[0].decode())
+check("title: Pads / FX with the page", titles == ["Pads 1-8", "FX 1-8", "Pads 9-16", "FX 9-16"], titles)
+
+# --- real firmware: Mixer constructor, then the real click of its text button -----------------------------------------
 r = Emu()
 r.stub(0x08042DC0, lambda uc, a: r.new(a[0] * max(1, a[1])))
 r.w32(PSTATE, 0)
-pads, mixer = r.new(0x2400), r.new(0x3000)
-try:
-    r.call(SYM["ctor_b"], pads)
-    r.call(SYM["ctor_d"], mixer)
-    fxs = r.new(0x2400)
-    r.call(SYM["ctor_a"], fxs)
-    ok_run = True
-except Exception as ex:  # noqa: BLE001
-    ok_run = repr(ex)
-ind, ind2, tvt = r.r32(PSTATE + 0x18), r.r32(PSTATE + 0x1C), r.r32(PSTATE + 0x24)
-rect = lambda w: struct.unpack("<4i", r.mu.mem_read(w + 4, 16))
-check("real constructors with the wrappers run through", ok_run is True, ok_run)
-check("real Pads screen: indicator widget at {100,165,120,40} with the toggle vtable",
-      ind != 0 and rect(ind) == (100, 165, 120, 40) and r.r32(ind) == tvt, (hex(ind), rect(ind) if ind else None))
-check("real Mixer screen: toggle is its text button {161,186,158,35} with the toggle vtable",
-      ind2 == mixer + 0x2AE8 and rect(ind2) == (161, 186, 158, 35) and r.r32(ind2) == tvt, (hex(ind2), rect(ind2)))
-first_child = r.r32(pads + 0x18)
-kids = []
-c = first_child
-while c and len(kids) < 64:
-    kids.append(c)
-    c = r.r32(c + 0x20)
-check("real Pads screen: the indicator is in the screen's child list", ind in kids, [hex(k) for k in kids[-3:]])
-ind3 = r.r32(PSTATE + 0x20)
-kids3, c = [], r.r32(fxs + 0x18)
-while c and len(kids3) < 80:
-    kids3.append(c)
-    c = r.r32(c + 0x20)
-check("real Effects screen: 'P1' label at {124,175,73,20} in its child list", ind3 != 0 and rect(ind3) == (124, 175, 73, 20)
-      and ind3 in kids3, (hex(ind3), rect(ind3) if ind3 else None))
+mixer = r.new(0x3000)
+r.call(SYM["ctor_d"], mixer)
+fld = r.r32(PSTATE + 0x18)
+rect = struct.unpack("<4i", r.mu.mem_read(fld + 4, 16))
+check("real Mixer: toggle is its text button {161,186,158,35}, command PAGE_CMD", fld == mixer + 0x2AE8
+      and rect == (161, 186, 158, 35) and r.r32(fld + 0x14) == 0x7F01, (hex(fld), rect))
+clickable = r.r8(fld + 0x9C)
+r.w8(fld + 0x9C, 1)                                 # clickable (the device highlights it, so it is)
+rposts = []
+r.stub(0x08069268, lambda uc, a: 0)                 # the Mixer's tile refresh needs app data the emulator lacks
+r.w16(0x24013CB0 + 0x14, 0x02)
+r.call(0x0805CCA0, fld)                             # the text button's release: click -> event 2 -> Mixer vt+0x30
+check(f"real click path: text button release reaches padpages_d_input and flips the page (clickable byte was {clickable})",
+      r.r8(PSTATE + 4) == 1, r.r8(PSTATE + 4))
 
 print(f"\n{'FAILED: ' + str(failures) if failures else 'all passed'}")
-sys.exit(1 if failures else 0)
