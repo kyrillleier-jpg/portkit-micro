@@ -77,4 +77,22 @@ row_d_r8_r3:                         /* 0x08069280  screen D: asr.w r8, r3, #4 *
     CTOR ctor_d, 0x080696e1, 2
     CTOR ctor_a, 0x080866b1, 0
 
+/* Left arrow: the button handler's case for button index 2 (0x080839e6, `movw r3, #0x7fe4`) does nothing on the Pads
+   screen (screen id 2). There: padpages_left(app = r0), then leave the handler (0x080837e8: add sp, #0x48;
+   pop {r4, pc}). Elsewhere: replay the replaced instruction and go on. */
+    .global left_arrow
+    .thumb_func
+    .type left_arrow, %function
+left_arrow:
+    movw    r3, #0x7fe4
+    ldrb    r3, [r0, r3]
+    cmp     r3, #2
+    beq     1f
+    movw    r3, #0x7fe4
+    bx      lr
+1:
+    bl      padpages_left
+    ldr     ip, =0x080837e9
+    bx      ip
+
     .ltorg

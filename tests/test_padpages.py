@@ -223,15 +223,39 @@ e2 = Emu()
 e = e2
 for stock in (0x08083E40, 0x080696E0, 0x080866B0):
     e.stub(stock, lambda uc, a: a[0])
+FAKE_VT = e.new(0x80)
+SET_RECT = 0x2407E000                    # a stub address for the text widget's vt+0x20
+e.mu.mem_write(SET_RECT, b"\x70\x47")  # bx lr
+e.w32(FAKE_VT + 0x20, SET_RECT | 1)
+rects, children, texts = [], [], []
+e.stub(0x08042DC0, lambda uc, a: e.new(a[0]))
+e.stub(0x0805D124, lambda uc, a: e.w32(a[0], FAKE_VT))
+e.stub(SET_RECT, lambda uc, a: rects.append(struct.unpack("<4i", e.mu.mem_read(a[1], 16))))
+e.stub(0x08060D30, lambda uc, a: children.append((a[0], a[1])))
+e.stub(0x0805D1DC, lambda uc, a: texts.append(bytes(e.mu.mem_read(a[1], 16)).split(b"\0")[0].decode()))
 e.w32(PSTATE, 0)
 scrs = {"ctor_b": e.new(0x2000), "ctor_d": e.new(0x2600), "ctor_a": e.new(0x2000)}
+e.w32(scrs["ctor_d"] + 0x2AE8, 0x080BFC9C)   # the Mixer's text button that becomes the toggle
 e.w8(PSTATE + 4, 1)
 rets = {name: e.call(SYM[name], s, 0x11, 0x22, 0x33) for name, s in scrs.items()}
 ok = all(rets[n] == scrs[n] for n in scrs) and e.r32(PSTATE) == 0x50414745 and e.r8(PSTATE + 4) == 0
 ok &= [e.r32(PSTATE + 0xC + 4 * k) for k in range(3)] == [scrs["ctor_a"], scrs["ctor_b"], scrs["ctor_d"]]
 check("constructor wrappers: stock ctor runs, this returned, screens remembered, page reset to 0", ok)
+ind = e.r32(PSTATE + 0x18)
+tvt = e.r32(PSTATE + 0x24)
+check("Pads screen gets a page indicator / toggle: text widget, rect in the panel middle, child of the screen, 'Pads 1-8'",
+      ind != 0 and rects[0] == (100, 165, 120, 40) and children[0] == (scrs["ctor_b"], ind) and e.r32(ind) == tvt,
+      (hex(ind), rects, children))
+m2 = e.r32(PSTATE + 0x1C)
+check("Mixer: its text button at +0x2ae8 becomes the toggle (vtable copy, input method replaced), labels 'Pads 1-8'",
+      m2 == scrs["ctor_d"] + 0x2AE8 and e.r32(m2) == tvt and e.r32(tvt + 0x30) == SYM["padpages_toggle_input"] | 1
+      and e.r32(tvt + 0x2C) == e.r32(0x080BFC9C + 0x2C) and texts[:2] == ["Pads 1-8", "Pads 1-8"], (hex(m2), texts))
+fx = e.r32(PSTATE + 0x20)
+check("Effects screen gets a passive 'P1' label over the middle of the send meters",
+      fx != 0 and rects[1:] == [(124, 175, 73, 20)] and children[1:] == [(scrs["ctor_a"], fx)] and texts[2:] == ["P1"]
+      and e.r32(fx) == FAKE_VT, (hex(fx), rects, children, texts))
 
-# --- page switch and encoder logic on the Pads screen ------------------------------------------------------------------
+# --- page switch and encoder logic on the Pads screen (B; A = Effects, D = Mixer?) ------------------------------------------------------------------
 A, Bs, D = scrs["ctor_a"], scrs["ctor_b"], scrs["ctor_d"]
 for s, base, rows in ((A, 0x34, 2), (Bs, 0x34, 2), (D, 0x3AC, 4)):
     for r in range(rows):
@@ -242,8 +266,8 @@ e.stub(0x080862B6, lambda uc, a: updates.append(("A", e.r16(a[1] + 4))))
 e.stub(0x08084046, lambda uc, a: updates.append(("B", e.r16(a[1] + 4))))
 e.stub(0x08069268, lambda uc, a: updates.append(("D", e.r16(a[1] + 4))))
 e.stub(0x08060DF8, lambda uc, a: posts.append((e.r16(a[1]), e.r16(a[1] + 8), e.r32(a[1] + 4))))
-e.stub(0x080863A0, lambda uc, a: notifies.append(e.r16(a[1])))
-e.stub(0x080865E4, lambda uc, a: 7)
+e.stub(0x08084154, lambda uc, a: notifies.append(e.r16(a[1])))
+e.stub(0x08083DEC, lambda uc, a: 7)
 
 
 def note(nid, code=0):
@@ -255,8 +279,9 @@ def note(nid, code=0):
 
 
 def notify(nid, code=0):
+    """a notification to the Pads screen (B); the selection arrives as 0x63"""
     del updates[:], posts[:], notifies[:]
-    e.call(SYM["padpages_a_notify"], A, note(nid, code))
+    e.call(SYM["padpages_b_notify"], Bs, note(0x63 if nid == 0x112 else nid, code))
 
 
 def page():
@@ -269,7 +294,7 @@ def ids(s, base, rows):
 
 notify(0x112, 0x13)                  # selection on pad 8
 notify(0x112, 0x00)                  # encoder wraps to pad 1
-check("encoder past pad 8: page 1, select pad 9 (0x20) via command 0x111", page() == 1 and posts == [(0x111, 0x20, 0x080BEE0C)],
+check("encoder past pad 8: page 1, select pad 9 (0x20) via command 0x63", page() == 1 and posts == [(0x63, 0x20, 0x080BEE0C)],
       (page(), posts))
 check("page 1: tile ids A and B = pads 9-16, D rows swapped",
       ids(A, 0x34, 2) == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33] and ids(Bs, 0x34, 2) == ids(A, 0x34, 2)
@@ -278,24 +303,24 @@ check("page switch refreshes A and B with pads 9-16, D with all 16",
       sorted(c for s, c in updates if s == "A") == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33]
       and sorted(c for s, c in updates if s == "B") == sorted(c for s, c in updates if s == "A")
       and len([1 for s, c in updates if s == "D"]) == 16, updates)
-check("the notification still reaches the stock handler", notifies == [0x112])
+check("the notification still reaches the stock handler", notifies == [0x63])
 
 for code in (0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33):   # the app confirms pad 9, encoder steps on to pad 16
     notify(0x112, code)
 check("encoder steps through pads 9-16: page 1 stays", page() == 1 and posts == [], (page(), posts))
 notify(0x112, 0x20)                  # wraps within page 1 -> back to page 0
-check("encoder past pad 16: page 0, select pad 1", page() == 0 and posts == [(0x111, 0x00, 0x080BEE0C)], (page(), posts))
+check("encoder past pad 16: page 0, select pad 1", page() == 0 and posts == [(0x63, 0x00, 0x080BEE0C)], (page(), posts))
 
 notify(0x112, 0x00)
 notify(0x112, 0x13)                  # encoder backwards from pad 1
-check("encoder back past pad 1: page 1, select pad 16", page() == 1 and posts == [(0x111, 0x33, 0x080BEE0C)], (page(), posts))
+check("encoder back past pad 1: page 1, select pad 16", page() == 1 and posts == [(0x63, 0x33, 0x080BEE0C)], (page(), posts))
 
 notify(0x112, 0x33)
-e.call(SYM["padpages_a_input"], A, note(3, 0x30))   # a tile pressed
+e.call(SYM["padpages_b_input"], Bs, note(3, 0x30))   # a tile pressed
 notify(0x112, 0x30)
 check("touch selection inside the page: no switch", page() == 1 and posts == [])
 notify(0x112, 0x30)
-e.call(SYM["padpages_a_input"], A, note(3, 0x33))
+e.call(SYM["padpages_b_input"], Bs, note(3, 0x33))
 notify(0x112, 0x33)
 notify(0x112, 0x20)                  # hmm: touch flag consumed; this one is an encoder wrap again
 check("touch flag is used up by one selection change", page() == 0)
@@ -306,10 +331,110 @@ notify(0x112, 0x22)
 check("selection lands on the other page (not a wrap): switch, no extra select", page() == 1 and posts == [])
 
 notify(0x67)
-check("'all new' on page 1: stock handler, then tiles refreshed with pads 9-16",
-      notifies == [0x67] and sorted(c for s, c in updates if s == "A") == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33])
-e.call(SYM["padpages_a_input"], A, note(0x3C))
+check("'all new' on page 1: stock handler, then Pads tiles refreshed with pads 9-16",
+      notifies == [0x67] and sorted(c for s, c in updates if s == "B") == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33])
+e.call(SYM["padpages_b_input"], Bs, note(0x3C))
 check("input wrapper returns the stock handler's result", e.mu.reg_read(UC_ARM_REG_R0) == 7)
+
+check("indicators follow the page", texts[-3:] == [("Pads 9-16" if page() else "Pads 1-8")] * 2 + [("P2" if page() else "P1")],
+      (texts[-3:], page()))
+
+# --- left arrow (button handler 0x080839e6 -> left_arrow) ---------------------------------------------------------------
+app = e.new(0x8100)
+
+
+def left(screen_id, sel):
+    """run left_arrow as the handler would reach it: a 0x48 frame plus pushed r4 / pc below sp"""
+    e.w8(app + 0x7FE4, screen_id)
+    e.w16(0x24013CB0 + 0x14, sel)       # the app's selected pad
+    del posts[:], texts[:]
+    sp = STACK - 0x50
+    e.w32(sp + 0x48, 0x4444)             # r4
+    e.w32(sp + 0x4C, RET | 1)            # pc
+    e.mu.reg_write(UC_ARM_REG_R0, app)
+    e.mu.reg_write(UC_ARM_REG_SP, sp)
+    e.mu.reg_write(UC_ARM_REG_LR, 0x2407E101)   # "continue in the stock handler": must not be taken on the Pads screen
+    e.mu.mem_write(0x2407E100, b"\x00\xbe")    # bkpt if reached
+    reached = []
+    h = e.mu.hook_add(UC_HOOK_CODE, lambda uc, a, *_: (reached.append(a), uc.emu_stop()), begin=0x2407E100, end=0x2407E100)
+    e.mu.emu_start(SYM["left_arrow"] | 1, RET, count=2_000_000)
+    e.mu.hook_del(h)
+    return bool(reached), e.mu.reg_read(UC_ARM_REG_R3), e.mu.reg_read(UC_ARM_REG_R4)
+
+
+p0 = page()
+went_on, r3, r4 = left(2, 0x12 | (p0 << 5))
+check("left arrow on Pads: page toggles, same place selected on the other page, handler left via its epilogue",
+      not went_on and page() == p0 ^ 1 and posts == [(0x63, 0x12 | ((p0 ^ 1) << 5), 0x080BEE0C)] and r4 == 0x4444
+      and texts[-3:-1] == [("Pads 9-16" if page() else "Pads 1-8")] * 2, (went_on, page(), posts, hex(r4), texts))
+p1 = page()
+went_on, r3, r4 = left(0x2E, 0x01)
+check("left arrow on the Mixer: no page change, stock path continues with r3 = 0x7fe4", went_on and page() == p1 and r3 == 0x7FE4
+      and posts == [], (went_on, page(), hex(r3)))
+
+# --- touch on a toggle widget ---------------------------------------------------------------------------------------------
+p2 = page()
+e.w16(0x24013CB0 + 0x14, 0x03 | (p2 << 5))
+del posts[:], texts[:]
+r = e.call(SYM["padpages_toggle_input"], m2, note(1))
+check("touch on the Mixer toggle: page flips, both labels follow, pad at the same place selected (0x63), handled",
+      r == 0 and page() == p2 ^ 1 and posts == [(0x63, 0x03 | ((p2 ^ 1) << 5), 0x080BEE0C)]
+      and texts == [("Pads 9-16" if page() else "Pads 1-8")] * 2 + [("P2" if page() else "P1")], (r, page(), posts, texts))
+e.stub(0x08060CF2, lambda uc, a: 1)
+r = e.call(SYM["padpages_toggle_input"], m2, note(2))
+check("other events on a toggle go to the text widget's own input method", r == 1 and page() == p2 ^ 1)
+
+# --- Effects screen: second touch on the selected effect cell toggles ------------------------------------------------
+e.stub(0x080865E4, lambda uc, a: 5)
+APPX = 0x24013CB0
+e.w16(APPX + 0x28, 0x300)                # DLY selected
+e.w16(APPX + 0x14, 0x11 | (page() << 5))
+p3 = page()
+del posts[:], texts[:]
+r = e.call(SYM["padpages_a_input"], A, note(3, 0x300))
+check("Effects: touch on the selected cell (DLY) toggles, labels incl. P1/P2 follow, pad at the same place selected",
+      r == 0 and page() == p3 ^ 1 and posts == [(0x63, 0x11 | ((p3 ^ 1) << 5), 0x080BEE0C)]
+      and texts[-1] == ("P2" if page() else "P1"), (r, page(), posts, texts))
+p4 = page()
+r1 = e.call(SYM["padpages_a_input"], A, note(3, 0x310))   # RVB, not selected
+r2 = e.call(SYM["padpages_a_input"], A, note(3, 0x12))    # a pad tile
+r3 = e.call(SYM["padpages_a_input"], A, note(1, 0x300))   # another event
+check("Effects: other cell, pad tiles and other events go to the stock handler", (r1, r2, r3) == (5, 5, 5) and page() == p4)
+
+# --- real firmware: Pads and Mixer constructors, text widget, setRect, add child, setText (only the allocator stubbed) ---
+r = Emu()
+r.stub(0x08042DC0, lambda uc, a: r.new(a[0] * max(1, a[1])))
+r.w32(PSTATE, 0)
+pads, mixer = r.new(0x2400), r.new(0x3000)
+try:
+    r.call(SYM["ctor_b"], pads)
+    r.call(SYM["ctor_d"], mixer)
+    fxs = r.new(0x2400)
+    r.call(SYM["ctor_a"], fxs)
+    ok_run = True
+except Exception as ex:  # noqa: BLE001
+    ok_run = repr(ex)
+ind, ind2, tvt = r.r32(PSTATE + 0x18), r.r32(PSTATE + 0x1C), r.r32(PSTATE + 0x24)
+rect = lambda w: struct.unpack("<4i", r.mu.mem_read(w + 4, 16))
+check("real constructors with the wrappers run through", ok_run is True, ok_run)
+check("real Pads screen: indicator widget at {100,165,120,40} with the toggle vtable",
+      ind != 0 and rect(ind) == (100, 165, 120, 40) and r.r32(ind) == tvt, (hex(ind), rect(ind) if ind else None))
+check("real Mixer screen: toggle is its text button {161,186,158,35} with the toggle vtable",
+      ind2 == mixer + 0x2AE8 and rect(ind2) == (161, 186, 158, 35) and r.r32(ind2) == tvt, (hex(ind2), rect(ind2)))
+first_child = r.r32(pads + 0x18)
+kids = []
+c = first_child
+while c and len(kids) < 64:
+    kids.append(c)
+    c = r.r32(c + 0x20)
+check("real Pads screen: the indicator is in the screen's child list", ind in kids, [hex(k) for k in kids[-3:]])
+ind3 = r.r32(PSTATE + 0x20)
+kids3, c = [], r.r32(fxs + 0x18)
+while c and len(kids3) < 80:
+    kids3.append(c)
+    c = r.r32(c + 0x20)
+check("real Effects screen: 'P1' label at {124,175,73,20} in its child list", ind3 != 0 and rect(ind3) == (124, 175, 73, 20)
+      and ind3 in kids3, (hex(ind3), rect(ind3) if ind3 else None))
 
 print(f"\n{'FAILED: ' + str(failures) if failures else 'all passed'}")
 sys.exit(1 if failures else 0)

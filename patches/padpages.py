@@ -39,13 +39,15 @@ THUNKS = [
     (0x080864EA, "c0f30312", "row_a_r2_r0"),     # ubfx r2, r0, #4, #4
     (0x0808655E, "c0f30312", "row_a_r2_r0"),
     (0x08069280, "4fea2318", "row_d_r8_r3"),     # asr.w r8, r3, #4
+    (0x080839E6, "47f6e473", "left_arrow"),      # movw r3, #0x7fe4 (button 2 = left arrow, per-screen case)
 ]
 
 # (vtable slot, stock word, cave symbol)
 WORDS = [
-    (0x080C64AC, 0x080865E5, "padpages_a_input"),    # Pads screen vtable +0x30
-    (0x080C64B0, 0x080863A1, "padpages_a_notify"),   # Pads screen vtable +0x34
-    (0x080C6378, 0x08084155, "padpages_b_notify"),   # screen B notifications
+    (0x080C64AC, 0x080865E5, "padpages_a_input"),    # Effects screen (A) vtable +0x30
+    (0x080C64B0, 0x080863A1, "padpages_a_notify"),   # Effects screen (A) vtable +0x34
+    (0x080C6374, 0x08083DED, "padpages_b_input"),    # Pads screen (B) vtable +0x30
+    (0x080C6378, 0x08084155, "padpages_b_notify"),   # Pads screen (B) vtable +0x34
 ]
 
 PATCHES = (

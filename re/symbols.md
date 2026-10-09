@@ -219,3 +219,55 @@ Befehl 0x111), 0x67 auf Seite 1 mit Pads 9-16 nachgefuellt.
 Unicorn (`tests/test_padpages.py`, 22 Checks): Thunks, echte Ruempfe von A/B/D adressieren auf beiden Seiten dieselbe
 sichtbare Kachel, fremde Pads uebersprungen, Seitenwechsel/Encoder-Logik. Nicht emuliert: Zeichnen, echtes
 Encoder-Verhalten auf Seite 2. Status: durch Emulation bestaetigt (Logik), nicht am Geraet.
+
+## Korrektur Bildschirm-Zuordnung (pk4, 2026-10-09)
+
+Layouts per Emulation der Konstruktoren (`tools/emu_layout.py`, Kinder-Widgets mit Rect/vtable/ID/Text):
+- **A (Ctor 0x080866B0, vtable 0x080C647C) = Effects**, nicht Pads: 8 Kacheln (Rumpf fragt 0xBB FX1 Send / 0xBC FX2 Send),
+  unten DLY-Zelle {1,149,119,72} ID 0x300, RVB-Zelle {200,149,119,72} ID 0x310 (Ebene 3), Send-Anzeigen x=122 / x=161 (37 breit).
+- **B (Ctor 0x08083E40, vtable 0x080C6344) = Pads**: 8 Kacheln, unten Panel {1,149,318,72} mit Keys {1,149,78,72},
+  Mitte {81,149,158,72} (Klasse 0x080BFCE8, ID 0xA0), Stop {241,149,78,72}. Eingaben vt+0x30 = 0x08083DEC (nur eigene
+  Buttons; Kachel-Touch und Encoder gehen nach oben). Notify vt+0x34 = 0x08084154: **Auswahl = 0x63** (Adresse msg+8 →
+  +0xD38, Kachel-Markierung), 0x66 Pad geaendert, 0x67 alles neu; 0x112 wird ignoriert.
+- **D (Ctor 0x080696E0, vtable 0x080C0694) = vermutlich Mixer**: 16 Kacheln (8 sichtbar), Rumpf fragt 0x77 Output ab,
+  unten vier Buttons 158x35.
+- C (Ctor 0x08085664) = Ein-/Ausgaenge (Kacheln = Buchsen, IDs Index<<4, Parameter 0xD9 Input / 0xDA Output) → keine Pads.
+- Kopfzeile gibt es nicht: Bildschirme y 0..219, Statuszeile unten y 220..239 (UI-Manager +0x2BC).
+pk3-Fehler am Geraet: Encoder-Erkennung haengte am Effects-Bildschirm und wartete auf 0x112. pk4: an B, Nachricht 0x63,
+Touch-Flag aus B vt+0x30. Tests angepasst (22 gruen).
+
+## Tasten und Build pk5 (2026-10-09)
+
+Tastentreiber 0x08041A50 (4 Tasten, Index = 3 − i ohne Flip UI; Tabelle im RAM 0x24009DA4, 0x18 je Taste, +8 Ereignis
+beim Druecken = 0xF4, Index im Ereignis +0xC). App-Ebene 0x080837D0: 0xF4 → 0x08083982, tbb ueber den Index:
+0 = HOME (Pads 2 → Mixer 0x2E → FX 0x30 → Pads, 0x0808EEDC), 1 = TOOLS (0x25 / 0x33 / 0x32), **2 = Linkspfeil**
+(Tabelle je Bildschirm ab ID 4: Pads → nichts; Mixer 0x2E → Pads; Mixer-Mute 0x2F und FX 0x30 → Mixer),
+3 = Rechtspfeil (Nachricht 0xC → Detail je Bildschirm). Bildschirm-IDs: Pads 2, Mixer 0x2E (Mute 0x2F), FX 0x30.
+Foto vom Geraet: UI am Geraet um 180° gedreht; Keys / Mitte / Stop erscheinen oben, Pads darunter.
+
+pk5: `left_arrow` ersetzt `movw r3, #0x7fe4` bei 0x080839E6; auf Bildschirm 2 → padpages_left(app) (Seite umschalten,
+Pad an gleicher Stelle per 0x111 waehlen; app+0x28 = Auswahl) und Ausstieg ueber 0x080837E8, sonst unveraendert.
+Seitenanzeige: Text-Widget (Ctor 0x0805D124, 0xA0 Bytes, per 0x08042DC0 angelegt), Rect {100,165,120,40} als Kind des
+Pads-Bildschirms ueber der leeren Panel-Mitte, setText 0x0805D1DC ("Pads 1-8" / "Pads 9-16"). Status: Emulation.
+Offen: Mixer- und FX-Seitenumschaltung per Bildschirm-Button.
+
+## Build pk6 (2026-10-09)
+
+- App-Befehl **0x63 = Pad waehlen** (0x08075984: app+0x14 = Auswahl, Nachricht 0x63, Engine-Parameter 0xC1);
+  0x111 waehlt eine Effekt-Zelle (app+0x28, Nachricht 0x112). pk3-pk5 haben faelschlich 0x111 benutzt. App = 0x24013CB0.
+- Touch-Zustellung: vt+0x28 (0x08060C4C) sucht das tiefste Widget, das den Punkt enthaelt und Touches annimmt
+  (vt+0x1C); Text-Widgets (vtable 0x080BFC9C) nehmen an (0x0805CB32 → 1), ignorieren sie aber (vt+0x30 = 0x08060CF2 → 1).
+  Kachel-Buttons: Ereignis 1 (Touch runter) → Ereignis 3 mit ID an den Elternteil, 2 → 4. Hochreichen: 0x08060DF8.
+- Mixer = D bestaetigt (Foto): vier leere Text-Buttons oben (UI 180° gedreht); {161,186,158,35} = D+0x2AE8 = oben links.
+- pk6: RAM-Kopie der Text-vtable (0x80 Bytes, Heap) mit vt+0x30 = padpages_toggle_input (Ereignis 1 → Seite um,
+  Pad an gleicher Stelle per 0x63 waehlen). Pads-Anzeige (eigenes Widget) und Mixer-Feld bekommen sie; beide zeigen
+  "Pads 1-8" / "Pads 9-16". Unicorn inkl. echter Konstruktoren / setRect / setText / Kind-Liste: 33 Checks gruen.
+  Annahme (vermutet): Touch runter kommt auch bei Text-Widgets als Ereignis 1.
+
+## Build pk7 (2026-10-09)
+
+Effects (A): Foto bestaetigt DLY / RVB oben (UI gedreht), Send-Anzeigen dazwischen. Eingabe-Wrapper vt+0x30
+(0x080C64AC): Ereignis 3 mit Ebene-3-Adresse == app+0x28 (bereits gewaehlte Effekt-Zelle) → Seite um (Pad an gleicher
+Stelle per 0x63), sonst Stock (0x080865E4). Anzeige "P1" / "P2": passives Text-Widget {124,175,73,20} ueber der Mitte
+der Send-Anzeigen ({122,149,37,72}, {161,149,37,72}). Zustand jetzt 0x28 Bytes (ind +0x18, ind2 +0x1C, ind3 +0x20,
+tvt +0x24). Unicorn inkl. echter Effects-/Pads-/Mixer-Konstruktoren: 36 Checks gruen.
