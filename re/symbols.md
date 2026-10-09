@@ -72,6 +72,8 @@ Setter 0x080B8254 (+0x84), 0x080B825C (Cutoff → params+4), 0x080B826C (Res →
 | +0x84 | Zeiger Parameterblock | 0 / Setter | – | gelesen |
 | +0x88 / +0x8C / +0x90 | letzte Werte / Dirty | 0 / 0.5 / 0 | 0 / 0.5 / 0 | – |
 
+Unicorn (`tests/test_fidelity.py`): Reset 0x080B8794 nullt `on`, danach bleibt Stille still → **durch Emulation bestaetigt**.
+
 Ergebnis: +0x60..+0x83 liest und schreibt ausser Prozess (ersetzt) und Koeffizienten-Helper (nur vom Prozess gerufen) niemand
 → `ostate` ist sicher. Der Reset beim Voice-Start ueberschreibt s1[0][1] mit 1.0 und nullt `on` (+0x40); `filter_process`
 setzt bei `on == 0` alle Integratoren auf 0, bevor es sie benutzt → kein Knackser. Magic (+0x04) bleibt stehen.
@@ -99,3 +101,14 @@ unausgerichteten Zugriffe). "Keine Referenz" beweist nicht "unbenutzt" (DMA mit 
 3. ~~Patch-RAM fuer `PARK`~~: Vorschlag 0x2406C100, siehe RAM.
 4. ~~Filterobjekt +0x60/+0x64~~: geprueft, siehe Filterobjekt-Layout.
 5. Cutoff in der Micro bipolar (LP links / HP rechts) wie in der BB? Typbyte obj+0 und Param `Type:` (0x12) noch nicht ausgewertet.
+
+## Fidelity-Patch (Build pk1, 2026-10-09)
+
+`patches/fidelity.py` + `patches/cave.py`, Code-Cave ab 0x080E3E90 (3252 Bytes). Hooks: Interp-Registrierung, beide
+Filter-Aufrufe (Thunks r5 / r6), 3 Voice-Reader-Aufrufe, 6 Kernel-Aufrufe; `patch.py` prueft, dass jeder Aufrufer von
+0x080B8420, 0x080ADC4C, 0x080A1400, 0x080A1494 umgeleitet ist. Unicorn auf dem gepatchten Image, 28 Checks gruen:
+Fidelity-Liste und Label ueber die echte Aufrufstelle, Crunch/12 Bit, Interp pro Pad aus dem App-Store, Thunks A/B,
+LP/HP des SVF, alle Machine-Modi, Kernels ohne Machine bitgleich mit Stock, Voice-Reader-Wrapper reicht alle Argumente
+durch. Status: **durch Emulation bestaetigt**, nicht hardware-verified.
+Emulator-Hinweis: Unicorn 2.1 hat auf M-Profil kein Double (Stock-Res-Kurve nutzt `vcvt.f64.f32`) → Tests laufen wie
+blackbox-mod/emu.py mit `UC_CPU_ARM_MAX` im Thumb-Modus.

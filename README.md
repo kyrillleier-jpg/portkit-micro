@@ -1,0 +1,30 @@
+# portkit
+
+Funktionen aus dem [Blackbox-Mod](https://github.com/j3threejay/blackbox-mod) als Patch fuer die 1010music
+bitbox micro, Firmware 2.3.4. Keine Firmware in diesem Repo: Der Patcher arbeitet auf deiner eigenen `MICRO.BIN`.
+
+## Stand
+
+| Funktion | Status |
+|---|---|
+| Fidelity (Interp-Liste: Normal, HighQ, SP1200, SP-12, S950, MPC60, SP Raw, 16k..2k) | durch Emulation bestaetigt, nicht am Geraet |
+| 24-dB-SVF mit Drive auf Res (ersetzt den Pad-Biquad) | durch Emulation bestaetigt, nicht am Geraet |
+| Machine-Drive (Saturation als Wandler-Eingang) | nicht portiert (Micro hat keinen Saturation-Parameter) |
+
+Splash: Zeile 2 `portkit mod`, Version `2.3.4-pk1`.
+
+## Bauen
+
+```sh
+./setup.sh                                  # Repos, venv, Hash-Check; firmware/MICRO.BIN muss 2.3.4 sein
+./build.sh                                  # src/ -> out/cave.elf, out/cave.bin
+.venv/bin/python -I patch.py fidelity cave  # -> out/fidelity+cave/MICRO.BIN, mit Verifikation
+.venv/bin/python -I tests/test_fidelity.py  # Unicorn-Tests auf dem gepatchten Image
+```
+
+`patch.py` schreibt nur, wenn alles gruen ist: Stock-Hash, erwartete Stock-Bytes an jeder Stelle, Null-Repack,
+alle Aenderungen in registrierten Bereichen, jeder umgeleitete Aufruf landet auf einer Cave-Funktion, und jeder
+Aufrufer der ersetzten Funktionen ist erfasst.
+
+Flashen (Recovery: weisse Pfeiltaste rechts beim Einschalten, `MICRO.BIN` im SD-Root) erst nach Sicherung des
+Stock-Images. Adressen und Belege: `re/symbols.md`. Lizenzen: `THIRD_PARTY.md`.
