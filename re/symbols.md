@@ -343,3 +343,31 @@ Pad-Waehler: Besitzer verstecken ihn im Ctor (+0x30 = 1), Elternteil = Besitzer-
 wenn ein Waehler des aktuellen Bildschirms offen ist (sonst Stock "zurueck"); Fusszeile 22 px, nicht klickbar; Namen 5
 Zeichen; Markieren-Aufrufe der Besitzer (7 Stellen, 0x080732D6) gemerkt und nach dem Blaettern neu markiert.
 43 Checks gruen.
+
+## Hardware-Test pkC und Diagnose-Build pkD (2026-10-09)
+
+pkC am Geraet: Fusszeile im Waehler unerwuenscht; Encoder auf Seite 2 waehlt weiterhin nichts; gewaehltes Pad im
+Waehler nicht markiert.
+Befund: 0x0807C9FC (±1, Werte 0x64/0x65) und 0x0807C9C4 (Index in 0x24013C30) und 0x08078F60 sind Faelle der
+Engine→App-Nachrichtenschleife (0x0807F3C2, Nachricht aus 0x080939B4, Engine-ID → Adresse); ob der Hardware-Encoder
+dort ankommt, ist offen (pkC-Ersatz von 0x08076CEC wirkte am Geraet nicht). Waehler oeffnen: 0x08073392 (Marken
+loeschen, +0x63C/+0x640 = zuletzt markierte Adresse neu markieren).
+pkD: Fusszeile wieder Stock; der Waehler folgt beim Oeffnen / Markieren (offen auf dem aktuellen Bildschirm) der Seite
+des markierten Pads. DIAG: Pads-Kopfzeile "P<Seite> s<padpages_step> i<0x0807C9C4> r<0x0807C9FC> n<Nachricht 0x63>
+<app+0x14 hex>" (Zaehler mod 10; Wrapper an 0x0807F7E2 / 0x0807F7EC).
+
+## Hardware-Test pkD und Build pkE (2026-10-10)
+
+pkD am Geraet (Fotos, Kopfzeile vorher/nachher): s, i, r bleiben bei 3 Rastungen stehen, n zaehlt mit; Seite 1:
+00 → 03; Seite 2: 23 → 01 (Kopfzeile bleibt P2). Der Encoder laeuft also weder ueber 0x08076CEC noch ueber 0x0807C9C4 /
+0x0807C9FC, sondern ueber den Pads-Bildschirm selbst:
+- Notify 0x08084154, Nachricht 0x32 (Fall 0x0808438C): msg+0xC (0/2 → Liste +0xD40, sonst +0xD58), 0x0805F114 bewegt
+  den Index (+0xD4C / +0xD64), Adresse aus der Liste → Befehl 0x63 (0x080843B4 / 0x080843FC, ueber 0x08060DF8).
+- Listen 8 x {0x080BF4CC, Adresse}: 0x24021DC8 zeilenweise (10..13, 00..03), 0x24021E08 spaltenweise (10,00,11,01,...);
+  einmal beim Booten gefuellt von 0x080847C4 (Init-Liste 0x080BEC1C); gelesen nur von 0x080840C4 (Auswahl → Index,
+  nach 0x63) und 0x0808438C.
+- Auf Seite 2 fand 0x080840C4 die Auswahl nicht (Index blieb), der Encoder waehlte aus den Pads 1-8.
+pkE: set_page schreibt die Zeilen beider Listen auf die Seite um (Adresse ^ 0x20), kein Code-Patch. DIAG entfernt
+(Kopfzeile wieder "Pads 1-8"/"Pads 9-16", Wrapper 0x0807F7E2 / 0x0807F7EC zurueck auf Stock). padpages_step
+(0x08076CEC-Ersatz) bleibt: Engine-Pfad, am Geraet nie aufgerufen, auf Seite 0 bitgleich.
+Tests: echte Init, echte Suche 0x080840C4 und echter Encoder-Fall in 0x08084154 auf Seite 1 → Befehl 0x63 mit 0x22.

@@ -447,6 +447,43 @@ check("encoder step on page 1: runs through pads 9-16 and wraps", seq == P1[1:] 
 check("encoder step on page 1 from a page-0 selection: first / last pad of page 1",
       step(SYM["padpages_step"], 0x03, 1)[1] == 0x20 and step(SYM["padpages_step"], 0x03, -1)[1] == 0x33)
 
+# --- Pads screen encoder lists (real boot init 0x080847c4, real lookup 0x080840c4, real encoder case of 0x08084154) ---
+k = Emu()
+k.call(0x080847C4)
+k.w32(PSTATE, 0x50414745)
+LISTS = 0x24021DC8
+
+
+def enc_lists():
+    return [k.r16(LISTS + 8 * i + 4) for i in range(16)]
+
+
+stock_lists = enc_lists()
+kobj = k.new(0x8100)
+k.w8(kobj + 0x7FE4, 2)
+k.call(SYM["padpages_left"], kobj)                            # page 1
+p1_lists = enc_lists()
+k.call(SYM["padpages_left"], kobj)                            # page 0
+check("encoder lists: stock order on page 0, the same order with pads 9-16 on page 1, back on page 0",
+      stock_lists == [0x10, 0x11, 0x12, 0x13, 0, 1, 2, 3, 0x10, 0, 0x11, 1, 0x12, 2, 0x13, 3]
+      and p1_lists == [c | 0x20 for c in stock_lists] and enc_lists() == stock_lists, [hex(c) for c in p1_lists])
+k.call(SYM["padpages_left"], kobj)                            # page 1
+bscr = k.new(0x2000)
+idx = []
+k.stub(0x0805ECE4, lambda uc, a: idx.append((a[0] - bscr, a[1])))
+k.w16(bscr + 0xD38, 0x21)
+k.call(0x080840C4, bscr)
+check("Pads screen finds a page-1 selection (0x21) in both encoder lists", idx == [(0xD40, 5), (0xD58, 3)], idx)
+kposts = []
+k.stub(0x0805F114, lambda uc, a: k.w32(bscr + 0xD4C, 6))      # the encoder moved the row-wise list to index 6
+k.stub(0x08060DF8, lambda uc, a: kposts.append((k.r16(a[1]), k.r16(a[1] + 8))))
+km = k.new(0x20)
+k.w16(km, 0x32)
+k.w32(km + 0xC, 0)
+k.w32(km + 0x10, 1)
+k.call(0x08084154, bscr, km)
+check("encoder on page 1 (real Pads notify, message 0x32): selects pad 0x22 of page 1", kposts == [(0x63, 0x22)], kposts)
+
 # --- pad picker (real constructor and placing; allocator and pad-name lookup stubbed) -----------------------------------
 q = Emu()
 q.stub(0x08042DC0, lambda uc, a: q.new(a[0] * max(1, a[1])))
@@ -469,9 +506,9 @@ q.call(SYM["padpages_picker_select"], pk, m)                 # the owner marks i
 q.call(0x080734D6, pk, pt)                                    # real placing -> padpages_picker_place
 codes = lambda: [q.r16(pk + 0x34 + r * 0x2B0 + c * 0xAC + 0xA4) for r in range(2) for c in range(4)]
 frect = struct.unpack("<4i", q.mu.mem_read(foot + 4, 16))
-check("placing on page 0: footer shown as a 22-pixel strip next to the tiles, not clickable, tiles pads 1-8",
-      q.r8(foot + 0x30) == 0 and frect == (56, 42, 264, 22) and q.r8(foot + 0x9C) == 0 and q.r32(foot + 0x14) == 0x7F01
-      and codes() == [0, 1, 2, 3, 0x10, 0x11, 0x12, 0x13], (q.r8(foot + 0x30), frect, q.r8(foot + 0x9C), codes()))
+check("placing on page 0: footer stays stock (hidden, its rect, its command), tiles pads 1-8",
+      q.r8(foot + 0x30) == 1 and frect == (56, 0, 264, 64) and q.r32(foot + 0x14) == 0xFFFFFFFF
+      and codes() == [0, 1, 2, 3, 0x10, 0x11, 0x12, 0x13], (q.r8(foot + 0x30), frect, hex(q.r32(foot + 0x14)), codes()))
 # left arrow while this picker is open on the current screen
 ui, owner = q.new(0x300), q.new(0x100)
 q.w32(0x24000DC8, ui)
@@ -506,9 +543,22 @@ seen_text = {}
 q.stub(0x0805D1DC, lambda uc, a: seen_text.__setitem__(a[0], bytes(q.mu.mem_read(a[1], 16)).split(b"\0")[0].decode()))
 q.call(0x080734D6, pk, pt)
 tiles = [pk + 0x34 + r * 0x2B0 + c * 0xAC for r in range(2) for c in range(4)]
-check("page 1 picker: tiles show pad names (no extension, 5 chars), footer 'Pads 9-16'",
+check("page 1 picker: tiles show pad names (no extension, 5 chars), footer untouched",
       seen_text.get(tiles[1]) == "LOOPL" and seen_text.get(tiles[7]) == "HAT" and seen_text.get(tiles[0]) == ""
-      and seen_text.get(foot) == "Pads 9-16", {hex(k): v for k, v in seen_text.items()})
+      and foot not in seen_text, {hex(k): v for k, v in seen_text.items()})
+# the owner marks a pad of the other page while the picker is open: the page follows
+q.w16(m + 4, 0x02)
+q.call(SYM["padpages_picker_select"], pk, m)
+check("owner marks pad 0x02 while the picker is open on page 1: page 0 shown", q.r8(PSTATE + 4) == 0 and codes()[:4] == [0, 1, 2, 3])
+q.w8(pk + 0x30, 1)
+q.w16(m + 4, 0x23)
+q.call(SYM["padpages_picker_select"], pk, m)
+check("... while it is closed: page stays", q.r8(PSTATE + 4) == 0)
+q.w16(m + 4, 0x31)
+q.call(SYM["padpages_picker_select"], pk, m)
+q.call(0x080734D6, pk, pt)                                    # opening: follows the owner's last mark (0x31, page 1)
+check("opening the picker shows the page of the owner's marked pad", q.r8(PSTATE + 4) == 1)
+q.w8(pk + 0x30, 0)
 q.w32(foot + 0x14, 0x18C)                                     # an owner that uses the footer ("Pads" / "Seq")
 seen_text.clear()
 q.call(0x080734D6, pk, pt)

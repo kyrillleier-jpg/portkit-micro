@@ -5,7 +5,7 @@ import os
 
 from thumb import ROOT, STOCK_END
 
-BUILD = b"C"    # 1 = Fidelity + 24 dB SVF (no machine drive), 2 = + Fidelity on Clip / Slicer / Granular pages, 3 = + pad pages (pads 9-16), 4 = page switch on the real Pads screen (0x63), 5 = left arrow pages, page indicator on Pads, 6 = select via 0x63, touch toggles on Pads and Mixer, 7 = Effects: selected cell toggles, P1/P2, 8 = page in the title (Pads, FX), Mixer toggle via click command, 9 = tile play state / progress follow the page, 10 = pad picker pages + toggle, B = pages by button only, picker footer toggle, pad names in the picker, C = encoder within the page, picker: left arrow, small footer, 5-char names, selected mark kept
+BUILD = b"E"    # 1 = Fidelity + 24 dB SVF (no machine drive), 2 = + Fidelity on Clip / Slicer / Granular pages, 3 = + pad pages (pads 9-16), 4 = page switch on the real Pads screen (0x63), 5 = left arrow pages, page indicator on Pads, 6 = select via 0x63, touch toggles on Pads and Mixer, 7 = Effects: selected cell toggles, P1/P2, 8 = page in the title (Pads, FX), Mixer toggle via click command, 9 = tile play state / progress follow the page, 10 = pad picker pages + toggle, B = pages by button only, picker footer toggle, pad names in the picker, C = encoder within the page, picker: left arrow, small footer, 5-char names, selected mark kept, D = DIAG title (encoder paths), picker footer stock, picker follows the marked pad, E = Pads encoder lists follow the page, no DIAG
 
 
 def slot(text, size=16):
