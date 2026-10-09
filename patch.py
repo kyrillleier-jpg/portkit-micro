@@ -1,13 +1,13 @@
 """Apply byte patches to the stock bitbox micro 2.3.4 firmware and write an SD-card-ready MICRO.BIN.
 
-  python3 patch.py fidelity cave        (run ./build.sh first)
+  python3 patch.py fidelity pages padpages cave        (run ./build.sh first)
 
 Each patchset in patches/ is a module defining PATCHES = [(addr, old_bytes, new_bytes), ...]. Every patch verifies the
 stock bytes before writing, so a patch built for the wrong firmware fails loudly. After patching, verify():
   - zero repack: applying nothing reproduces the stock image bit for bit
   - every changed byte lies inside a registered patch range (or the appended cave)
-  - every rewritten BL lands on a function symbol inside the cave, and every caller of an EXCLUSIVE stock callee is
-    hooked
+  - every rewritten BL (HOOKS, THUNKS) and every rewritten table word (WORDS) lands on a function symbol inside the
+    cave, and every caller of an EXCLUSIVE stock callee is hooked
 Nothing is written unless all checks pass. The stock file is never modified.
 """
 import hashlib
@@ -90,6 +90,14 @@ def verify(stock, data, ranges, names):
             # and nothing in the patched stock part still calls it
             still = {s for s, t in all_bl_sites(data, STOCK_END) if t == callee}
             assert not still, f"{name}: {callee:#x} still called from {sorted(hex(s) for s in still)}"
+        # instruction thunks: the site is now a BL into a cave function
+        for at, _, _ in getattr(mod, "THUNKS", []):
+            t = bl_target(bytes(data[at - BASE:at - BASE + 4]), at)
+            assert t is not None and STOCK_END <= t < cave_end and t in funcs, f"{name}: thunk at {at:#x} -> {t}"
+        # table words (vtable slots): a Thumb pointer to a cave function
+        for at, _, _ in getattr(mod, "WORDS", []):
+            v = int.from_bytes(data[at - BASE:at - BASE + 4], "little")
+            assert v & 1 and STOCK_END <= (v & ~1) < cave_end and (v & ~1) in funcs, f"{name}: word at {at:#x} = {v:#x}"
     print("verify: zero repack ok, all changes registered, detours land in the cave, exclusive callers hooked")
 
 

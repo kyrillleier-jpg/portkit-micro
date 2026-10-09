@@ -201,3 +201,21 @@ behandelt Encoder 0x3C/0x3D nur bei Flag +0x1BE0, sonst "nicht behandelt" (→ u
 UI-Manager (vtable 0x080C6384, Handler 0x08084A70): beim Bildschirmwechsel 0x63, 0x67 (alles neu), 0x112 (Auswahl)
 an den neuen Bildschirm (0x08084FA0 / 0x08084FF8).
 Ausweg: Seitenwechsel im 0x112-Handler erkennen (Auswahl springt von letztem auf erstes Pad der Seite, nicht durch Touch).
+
+## Pad-Seiten, Build pk3 (Prototyp, 2026-10-09)
+
+`src/padpages.c`, `src/padpages_thunk.S`, `patches/padpages.py`. Zustand ab 0x2406C110 (magic "PAGE", page @+4, touch,
+busy, last_sel, Instanzen A/B/D). Raster-Bildschirme: A = Pads (vtable 0x080C647C, Kacheln +0x34, 8), B = vtable
+0x080C6378 (Kacheln +0x34, 8), D = Waveform-Pad-Raster (vtable 0x080C0694, Kacheln +0x3AC, **16, Zeilen 2-3 unsichtbar**,
+eigene Pruefung laesst Zeilen 0-3 zu), C = Mixer/FX (Widget 0x28C, nach Pad-Nummer indiziert, Pads 9-16 abgewiesen →
+unveraendert).
+
+Pruefungen vor dem push von lr (0x08084034, 0x08084138, 0x080862A4, 0x08086478) → Aufrufer auf C-Wrapper umgeleitet
+(Seite pruefen, dann Rumpf hinter der Pruefung: 0x08084046, 0x080862B6, 0x08086482). `ubfx`-Zeilen in den Ruempfen
+(8 Stellen) → Thunk Zeile − 2·Seite; D: `asr.w r8, r3, #4` → Zeilen per XOR getauscht. Konstruktoren im UI-Manager
+(0x08085140 B, 0x0808519C D, 0x080851C4 A) → Wrapper merken die Instanzen, Seite 0. vtable A +0x30/+0x34 und B-Notify
+→ Wrapper: Touch-Flag, Encoder-Ueberlauf (letztes → erstes Pad der Seite ohne Touch = naechste Seite, Auswahl per
+Befehl 0x111), 0x67 auf Seite 1 mit Pads 9-16 nachgefuellt.
+Unicorn (`tests/test_padpages.py`, 22 Checks): Thunks, echte Ruempfe von A/B/D adressieren auf beiden Seiten dieselbe
+sichtbare Kachel, fremde Pads uebersprungen, Seitenwechsel/Encoder-Logik. Nicht emuliert: Zeichnen, echtes
+Encoder-Verhalten auf Seite 2. Status: durch Emulation bestaetigt (Logik), nicht am Geraet.

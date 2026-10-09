@@ -1,10 +1,10 @@
-"""Unicorn tests for patches/fidelity.py and patches/pages.py on the patched image (out/fidelity+pages+cave/MICRO.BIN).
+"""Unicorn tests for patches/fidelity.py and patches/pages.py on the patched image (out/fidelity+pages+padpages+cave/MICRO.BIN).
 
 Real firmware code runs for: the Interp registration call, the app pad store (init 0x08089fc4, get/set), the stock
 cutoff / resonance curves, the parameter evaluator, the audio-buffer accessors, the two resampling kernels and the
 voice-start filter reset. Only the allocator (0x08042dc0) is replaced, by a bump allocator.
 
-  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity pages cave)
+  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity pages padpages cave)
 """
 import math
 import os
@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "patches"))
 from thumb import BASE, symbols  # noqa: E402
 
-IMG = open(os.path.join(ROOT, "out", "fidelity+pages+cave", "MICRO.BIN"), "rb").read()
+IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+cave", "MICRO.BIN"), "rb").read()
 SYM = symbols(os.path.join(ROOT, "out", "cave.elf"))
 
 APP_PADS = 0x24013CB0 + 0x1840
