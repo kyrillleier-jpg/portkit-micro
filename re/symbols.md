@@ -313,3 +313,19 @@ geleert), Platzieren: letzter set_rect (0x08073564) → Umschalter neben die Kac
 Eingabe-Wrapper (Klick PAGE_CMD → Seite um, Waehler bleibt offen), Thunks picker_sel_tst / picker_mark0 / picker_mark1,
 set_page schreibt die Kachel-Adressen aller Waehler um und markiert neu. Unicorn inkl. echtem Ctor, Platzieren, Klickweg:
 40 Checks gruen.
+
+## Hardware-Test pkA und Build pkB (2026-10-09)
+
+pkA am Geraet: Pad 9 startet richtig, Balken richtig. Fehler: Encoder auf Seite 2 springt auf Seite 1 (der Encoder waehlt
+nur ueber Pads 1-8; die Auswahl-Erkennung blaetterte hinterher); Umschalter im Pad-Waehler unsichtbar, aber antippbar.
+Ursache unsichtbare eigene Widgets (pk6, pk7, pkA): Kinderliste +0x18 Kopf / +0x1C Ende, +0x20 naechstes / +0x24 voriges;
+0x08060D30 haengt ans Ende; Zeichnen (0x08060BE6 / 0x08060C32) laeuft vom Ende zum Kopf (zuletzt Angehaengtes liegt
+unten), Touch-Suche (0x08060C4C) vom Kopf. Text-Widget-Ctor 0x0805D124: +0x9C klickbar = 1 ab Werk.
+Pad-Waehler-Fusszeile +0x594 (Text-Widget): Befehl +0x14 = Waehler +0x5A8 (-1 = kein Besitzer), versteckt (+0x30 =
+Waehler +0x5C4) solange unbenutzt; nur 0x0806CB08 nutzt sie ("Pads"/"Seq", Befehl 0x18C, 0x08073350). Kleine Kacheln sind
+Text-Widgets (Ctor 0x0805D2DC ruft 0x0805D124), setText wirkt. Pad-Name: 0x080792E8(App, {lit, Adresse}, Puffer) →
+Dateiname bei +0 (wie die Kachel-Ruempfe; 0x0805DCDC schneidet die Endung ab).
+pkB: Auswahl-Erkennung und Pads-Eingabe-Wrapper entfernt (nur noch Buttons). Waehler: eigenes Seiten-Widget entfernt;
+beim Platzieren Kachel-Adressen + Namen (ohne Endung, 7 Zeichen) der Seite, unbenutzte Fusszeile eingeblendet mit
+"Pads 1-8"/"Pads 9-16" und Befehl PAGE_CMD. patch.py verweigert eine cave.elf, die aelter als src/ ist (ein
+fehlgeschlagener Build hatte ein Image mit alter Cave erzeugt; verworfen, nicht ausgeliefert). 36 Checks gruen.

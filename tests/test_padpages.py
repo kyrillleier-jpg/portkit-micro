@@ -250,7 +250,6 @@ e.stub(0x08084046, lambda uc, a: updates.append(("B", e.r16(a[1] + 4))))
 e.stub(0x08069268, lambda uc, a: updates.append(("D", e.r16(a[1] + 4))))
 e.stub(0x08060DF8, lambda uc, a: posts.append((e.r16(a[1]), e.r16(a[1] + 8), e.r32(a[1] + 4))))
 e.stub(0x08084154, lambda uc, a: notifies.append(e.r16(a[1])))
-e.stub(0x08083DEC, lambda uc, a: 7)
 
 
 def note(nid, code=0):
@@ -277,8 +276,15 @@ def ids(s, base, rows):
 
 notify(0x112, 0x13)                  # selection on pad 8
 notify(0x112, 0x00)                  # encoder wraps to pad 1
-check("encoder past pad 8: page 1, select pad 9 (0x20) via command 0x63", page() == 1 and posts == [(0x63, 0x20, 0x080BEE0C)],
+notify(0x112, 0x22)                  # a pad of the other page
+check("selection changes (encoder, other page) never switch the page", page() == 0 and posts == [] and notifies == [0x63],
       (page(), posts))
+
+e.w16(0x24013CB0 + 0x14, 0x02)
+del updates[:], posts[:]
+e.call(SYM["padpages_left"], 0x24013CB0)   # a page button
+check("page button: page 1, pad at the same place selected (0x22) via command 0x63",
+      page() == 1 and posts == [(0x63, 0x22, 0x080BEE0C)], (page(), posts))
 check("page 1: tile ids A and B = pads 9-16, D rows swapped",
       ids(A, 0x34, 2) == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33] and ids(Bs, 0x34, 2) == ids(A, 0x34, 2)
       and ids(D, 0x3AC, 4)[:8] == ids(A, 0x34, 2) and ids(D, 0x3AC, 4)[8:] == [0, 1, 2, 3, 0x10, 0x11, 0x12, 0x13])
@@ -286,38 +292,12 @@ check("page switch refreshes A and B with pads 9-16, D with all 16",
       sorted(c for s, c in updates if s == "A") == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33]
       and sorted(c for s, c in updates if s == "B") == sorted(c for s, c in updates if s == "A")
       and len([1 for s, c in updates if s == "D"]) == 16, updates)
-check("the notification still reaches the stock handler", notifies == [0x63])
-
-for code in (0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33):   # the app confirms pad 9, encoder steps on to pad 16
-    notify(0x112, code)
-check("encoder steps through pads 9-16: page 1 stays", page() == 1 and posts == [], (page(), posts))
-notify(0x112, 0x20)                  # wraps within page 1 -> back to page 0
-check("encoder past pad 16: page 0, select pad 1", page() == 0 and posts == [(0x63, 0x00, 0x080BEE0C)], (page(), posts))
-
-notify(0x112, 0x00)
-notify(0x112, 0x13)                  # encoder backwards from pad 1
-check("encoder back past pad 1: page 1, select pad 16", page() == 1 and posts == [(0x63, 0x33, 0x080BEE0C)], (page(), posts))
-
-notify(0x112, 0x33)
-e.call(SYM["padpages_b_input"], Bs, note(3, 0x30))   # a tile pressed
-notify(0x112, 0x30)
-check("touch selection inside the page: no switch", page() == 1 and posts == [])
-notify(0x112, 0x30)
-e.call(SYM["padpages_b_input"], Bs, note(3, 0x33))
-notify(0x112, 0x33)
-notify(0x112, 0x20)                  # hmm: touch flag consumed; this one is an encoder wrap again
-check("touch flag is used up by one selection change", page() == 0)
-
-notify(0x112, 0x11)
-check("selection lands on page 0 while page 0 shown: nothing", page() == 0 and posts == [])
-notify(0x112, 0x22)
-check("selection lands on the other page (not a wrap): switch, no extra select", page() == 1 and posts == [])
+notify(0x112, 0x01)                  # encoder selects a pad of page 0 while page 1 is shown
+check("encoder selection on page 1 does not jump back to page 0", page() == 1 and posts == [])
 
 notify(0x67)
 check("'all new' on page 1: stock handler, then Pads tiles refreshed with pads 9-16",
       notifies == [0x67] and sorted(c for s, c in updates if s == "B") == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33])
-e.call(SYM["padpages_b_input"], Bs, note(0x3C))
-check("input wrapper returns the stock handler's result", e.mu.reg_read(UC_ARM_REG_R0) == 7)
 
 check("Mixer label follows the page", texts[-1:] == [("Pads 9-16" if page() else "Pads 1-8")], (texts[-1:], page()))
 
@@ -441,30 +421,43 @@ r.call(0x0805CCA0, fld)                             # the text button's release:
 check(f"real click path: text button release reaches padpages_d_input and flips the page (clickable byte was {clickable})",
       r.r8(PSTATE + 4) == 1, r.r8(PSTATE + 4))
 
-# --- pad picker (real constructor, placing, click; allocator stubbed) ----------------------------------------------------
+# --- pad picker (real constructor, placing, footer click; allocator and pad-name lookup stubbed) -----------------------
 q = Emu()
 q.stub(0x08042DC0, lambda uc, a: q.new(a[0] * max(1, a[1])))
+NAMES_BY_CODE = {0x00: b"KICK01.wav", 0x21: b"LOOPLONGNAME.wav", 0x33: b"HAT.wav"}
+q.stub(0x080792E8, lambda uc, a: q.mu.mem_write(a[2], NAMES_BY_CODE.get(q.r16(a[1] + 4), b"") + b"\0"))
 q.w32(PSTATE, 0)
 pk = q.new(0x700)
 q.call(SYM["ctor_picker"], pk)
-tog = q.r32(PSTATE + 0x3C)
-check("picker constructor wrapper: picker registered, toggle created (click command PAGE_CMD, clickable, child of the picker)",
-      q.r32(PSTATE + 0x1C) == pk and tog != 0 and q.r32(tog + 0x14) == 0x7F01 and q.r8(tog + 0x9C) == 1
-      and q.r32(tog + 0x2C) == pk, (hex(q.r32(PSTATE + 0x1C)), hex(tog)))
-q.mu.mem_write(pk + 4, struct.pack("<4i", 0, 0, 320, 220))      # the picker's own area (its parent's)
+check("picker constructor wrapper: picker registered", q.r32(PSTATE + 0x1C) == pk, hex(q.r32(PSTATE + 0x1C)))
+foot = pk + 0x594
+check("stock picker: footer unused (command -1) and hidden", q.r32(pk + 0x5A8) == 0xFFFFFFFF and q.r8(foot + 0x30) == 1)
+q.mu.mem_write(pk + 4, struct.pack("<4i", 0, 0, 320, 220))
 pt = q.new(8)
 q.mu.mem_write(pt, struct.pack("<2i", 60, 200))
-q.call(0x080734D6, pk, pt)
-trect = struct.unpack("<4i", q.mu.mem_read(tog + 4, 16))
-tile0 = struct.unpack("<4i", q.mu.mem_read(pk + 0x34 + 4, 16))
-check("placing: tiles from x=56, toggle left of them {0, 68, 54, 130}", tile0[:2] == (56, 68) and trect == (0, 68, 54, 130),
-      (tile0, trect))
+q.w16(0x24013CB0 + 0x14, 0x00)
+q.call(0x080734D6, pk, pt)                                    # real placing -> padpages_picker_place
 codes = lambda: [q.r16(pk + 0x34 + r * 0x2B0 + c * 0xAC + 0xA4) for r in range(2) for c in range(4)]
-q.w16(0x24013CB0 + 0x14, 0x21)
-q.call(0x0805CCA0, tog)                                            # real release of the toggle -> click -> picker input
-check("toggle click (real path): page 1, picker tiles carry pads 9-16, picker stays open",
+check("placing on page 0: footer shown, click command PAGE_CMD, tiles pads 1-8",
+      q.r8(foot + 0x30) == 0 and q.r32(foot + 0x14) == 0x7F01 and codes() == [0, 1, 2, 3, 0x10, 0x11, 0x12, 0x13],
+      (q.r8(foot + 0x30), hex(q.r32(foot + 0x14)), codes()))
+q.call(0x0805CCA0, foot)                                      # real release of the footer -> click -> picker input
+check("footer click (real path): page 1, tiles pads 9-16, picker stays open",
       q.r8(PSTATE + 4) == 1 and codes() == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33] and q.r8(pk + 0x30) == 0,
       (q.r8(PSTATE + 4), [hex(c) for c in codes()], q.r8(pk + 0x30)))
+# names and footer text: capture via a stub of setText now
+seen_text = {}
+q.stub(0x0805D1DC, lambda uc, a: seen_text.__setitem__(a[0], bytes(q.mu.mem_read(a[1], 16)).split(b"\0")[0].decode()))
+q.call(0x080734D6, pk, pt)
+tiles = [pk + 0x34 + r * 0x2B0 + c * 0xAC for r in range(2) for c in range(4)]
+check("page 1 picker: tiles show pad names (no extension, 7 chars), footer 'Pads 9-16'",
+      seen_text.get(tiles[1]) == "LOOPLON" and seen_text.get(tiles[7]) == "HAT" and seen_text.get(tiles[0]) == ""
+      and seen_text.get(foot) == "Pads 9-16", {hex(k): v for k, v in seen_text.items()})
+q.w32(pk + 0x5A8, 0x18C)                                      # an owner that uses the footer ("Pads" / "Seq")
+q.w32(foot + 0x14, 0x18C)
+seen_text.clear()
+q.call(0x080734D6, pk, pt)
+check("picker whose owner uses the footer: footer left alone", q.r32(foot + 0x14) == 0x18C and foot not in seen_text)
 marks = []
 q.stub(0x0805D1F0, lambda uc, a: marks.append((a[0], a[1])))
 m = q.new(8)

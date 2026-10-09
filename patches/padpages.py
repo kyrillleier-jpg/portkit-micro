@@ -34,7 +34,7 @@ HOOKS = [
     (0x0808747E, 0x080733B4, "ctor_picker"),
     (0x08090BF0, 0x080733B4, "ctor_picker"),
     (0x080922DC, 0x080733B4, "ctor_picker"),
-    # picker placing: its last set_rect, then our toggle beside the tiles
+    # picker placing: its last set_rect (the footer's), then tiles / names / footer brought to the page
     (0x08073564, 0x0805CB36, "padpages_picker_place"),
 ]
 EXCLUSIVE = {0x080862A4, 0x08086478, 0x08084034, 0x08084138, 0x08083E40, 0x080696E0, 0x080866B0, 0x080733B4}
@@ -65,7 +65,6 @@ THUNKS = [
 WORDS = [
     (0x080C64AC, 0x080865E5, "padpages_a_input"),    # Effects screen (A) vtable +0x30
     (0x080C64B0, 0x080863A1, "padpages_a_notify"),   # Effects screen (A) vtable +0x34
-    (0x080C6374, 0x08083DED, "padpages_b_input"),    # Pads screen (B) vtable +0x30
     (0x080C6378, 0x08084155, "padpages_b_notify"),   # Pads screen (B) vtable +0x34
     (0x080C0690, 0x080691B1, "padpages_d_input"),    # Mixer screen (D) vtable +0x30
     (0x080C5CBC, 0x08073255, "padpages_picker_input"),  # pad picker vtable +0x30

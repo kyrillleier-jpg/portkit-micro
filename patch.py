@@ -101,7 +101,17 @@ def verify(stock, data, ranges, names):
     print("verify: zero repack ok, all changes registered, detours land in the cave, exclusive callers hooked")
 
 
+def check_cave_fresh():
+    """Refuse a cave older than its sources (a failed ./build.sh leaves the old out/cave.elf behind)."""
+    elf = os.path.join(ROOT, "out", "cave.elf")
+    src = os.path.join(ROOT, "src")
+    newest = max(os.path.getmtime(os.path.join(src, f)) for f in os.listdir(src))
+    assert os.path.exists(elf) and os.path.getmtime(elf) >= newest, "out/cave.elf is older than src/: run ./build.sh"
+
+
 def main(names):
+    if "cave" in names:
+        check_cave_fresh()
     stock = load_stock()
     data, ranges = apply(stock, names)
     verify(stock, data, ranges, names)
