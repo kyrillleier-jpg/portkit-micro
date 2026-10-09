@@ -25,8 +25,19 @@ HOOKS = [
     (0x08085140, 0x08083E40, "ctor_b"),
     (0x0808519C, 0x080696E0, "ctor_d"),
     (0x080851C4, 0x080866B0, "ctor_a"),
+    # pad pickers: every construction
+    (0x0806CC48, 0x080733B4, "ctor_picker"),
+    (0x0806CC58, 0x080733B4, "ctor_picker"),
+    (0x0806E25E, 0x080733B4, "ctor_picker"),
+    (0x0807237E, 0x080733B4, "ctor_picker"),
+    (0x08082602, 0x080733B4, "ctor_picker"),
+    (0x0808747E, 0x080733B4, "ctor_picker"),
+    (0x08090BF0, 0x080733B4, "ctor_picker"),
+    (0x080922DC, 0x080733B4, "ctor_picker"),
+    # picker placing: its last set_rect, then our toggle beside the tiles
+    (0x08073564, 0x0805CB36, "padpages_picker_place"),
 ]
-EXCLUSIVE = {0x080862A4, 0x08086478, 0x08084034, 0x08084138, 0x08083E40, 0x080696E0, 0x080866B0}
+EXCLUSIVE = {0x080862A4, 0x08086478, 0x08084034, 0x08084138, 0x08083E40, 0x080696E0, 0x080866B0, 0x080733B4}
 
 # (site, stock instruction bytes, cave symbol): a 4-byte instruction in a function body becomes a BL to a thunk.
 THUNKS = [
@@ -40,6 +51,12 @@ THUNKS = [
     (0x0808655E, "c0f30312", "row_a_r2_r0"),
     (0x08069280, "4fea2318", "row_d_r8_r3"),     # asr.w r8, r3, #4
     (0x080839E6, "47f6e473", "left_arrow"),      # movw r3, #0x7fe4 (button 2 = left arrow, per-screen case)
+    (0x08084842, "00273e46", "loop_rows"),       # movs r7, #0; mov r6, r7: Pads tile state loop, first row
+    (0x08086B5A, "00273e46", "loop_rows"),       # ... Effects tile state loop
+    (0x08069DF8, "47ea0403", "loop_d_code"),     # orr.w r3, r7, r4: Mixer tile state loop, pad address
+    (0x080732DC, "12f00e0f", "picker_sel_tst"),  # tst.w r2, #0xe: picker "mark selected", row on the page
+    (0x0807331E, "a3b29942", "picker_mark0"),    # uxth r3, r4; cmp r1, r3: picker "mark playing", row 0
+    (0x0807332E, "44f01003", "picker_mark1"),    # orr r3, r4, #0x10: ... row 1
     (0x08076AD4, "46f040f9", "padpages_title"),  # bl snprintf(buf, 0x18, "Pads") in the title builder
     (0x08076AF0, "46f032f9", "padpages_title"),  # bl snprintf(buf, 0x18, "FX")
 ]
@@ -51,6 +68,7 @@ WORDS = [
     (0x080C6374, 0x08083DED, "padpages_b_input"),    # Pads screen (B) vtable +0x30
     (0x080C6378, 0x08084155, "padpages_b_notify"),   # Pads screen (B) vtable +0x34
     (0x080C0690, 0x080691B1, "padpages_d_input"),    # Mixer screen (D) vtable +0x30
+    (0x080C5CBC, 0x08073255, "padpages_picker_input"),  # pad picker vtable +0x30
 ]
 
 PATCHES = (

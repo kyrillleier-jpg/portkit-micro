@@ -391,6 +391,27 @@ r2 = e.call(SYM["padpages_a_input"], A, note(3, 0x12))    # a pad tile
 r3 = e.call(SYM["padpages_a_input"], A, note(1, 0x300))   # another event
 check("Effects: other cell, pad tiles and other events go to the stock handler", (r1, r2, r3) == (5, 5, 5) and page() == p4)
 
+# --- periodic tile state loops (real code; state query 0x08078b94 recorded) -------------------------------------------
+def state_codes(fn, p, scr):
+    e.w8(PSTATE + 4, p)
+    seen = []
+    e.stub(0x08078B94, lambda uc, a: seen.append(e.r16(a[2] + 4)))
+    for t in (0x0805E06C, 0x0805DFCE, 0x08060C32):
+        e.stub(t)
+    e.call(fn, scr, 0)
+    return seen
+
+
+pads_scr, fx_scr, mix_scr = e.new(0x2000), e.new(0x2000), e.new(0x2600)
+P0, P1 = [0, 1, 2, 3, 0x10, 0x11, 0x12, 0x13], [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33]
+check("Pads tile state loop: pads 1-8 on page 0, 9-16 on page 1",
+      state_codes(0x08084838, 0, pads_scr) == P0 and state_codes(0x08084838, 1, pads_scr) == P1)
+check("Effects tile state loop: pads 1-8 on page 0, 9-16 on page 1",
+      state_codes(0x08086B50, 0, fx_scr) == P0 and state_codes(0x08086B50, 1, fx_scr) == P1)
+check("Mixer tile state loop (16 tiles, rows swapped): visible rows show the page",
+      state_codes(0x08069DD0, 0, mix_scr) == P0 + P1 and state_codes(0x08069DD0, 1, mix_scr) == P1 + P0,
+      (state_codes(0x08069DD0, 1, mix_scr),))
+
 # --- title bar (real snprintf) ---------------------------------------------------------------------------------------
 titles = []
 for p in (0, 1):
@@ -419,5 +440,46 @@ r.w16(0x24013CB0 + 0x14, 0x02)
 r.call(0x0805CCA0, fld)                             # the text button's release: click -> event 2 -> Mixer vt+0x30
 check(f"real click path: text button release reaches padpages_d_input and flips the page (clickable byte was {clickable})",
       r.r8(PSTATE + 4) == 1, r.r8(PSTATE + 4))
+
+# --- pad picker (real constructor, placing, click; allocator stubbed) ----------------------------------------------------
+q = Emu()
+q.stub(0x08042DC0, lambda uc, a: q.new(a[0] * max(1, a[1])))
+q.w32(PSTATE, 0)
+pk = q.new(0x700)
+q.call(SYM["ctor_picker"], pk)
+tog = q.r32(PSTATE + 0x3C)
+check("picker constructor wrapper: picker registered, toggle created (click command PAGE_CMD, clickable, child of the picker)",
+      q.r32(PSTATE + 0x1C) == pk and tog != 0 and q.r32(tog + 0x14) == 0x7F01 and q.r8(tog + 0x9C) == 1
+      and q.r32(tog + 0x2C) == pk, (hex(q.r32(PSTATE + 0x1C)), hex(tog)))
+q.mu.mem_write(pk + 4, struct.pack("<4i", 0, 0, 320, 220))      # the picker's own area (its parent's)
+pt = q.new(8)
+q.mu.mem_write(pt, struct.pack("<2i", 60, 200))
+q.call(0x080734D6, pk, pt)
+trect = struct.unpack("<4i", q.mu.mem_read(tog + 4, 16))
+tile0 = struct.unpack("<4i", q.mu.mem_read(pk + 0x34 + 4, 16))
+check("placing: tiles from x=56, toggle left of them {0, 68, 54, 130}", tile0[:2] == (56, 68) and trect == (0, 68, 54, 130),
+      (tile0, trect))
+codes = lambda: [q.r16(pk + 0x34 + r * 0x2B0 + c * 0xAC + 0xA4) for r in range(2) for c in range(4)]
+q.w16(0x24013CB0 + 0x14, 0x21)
+q.call(0x0805CCA0, tog)                                            # real release of the toggle -> click -> picker input
+check("toggle click (real path): page 1, picker tiles carry pads 9-16, picker stays open",
+      q.r8(PSTATE + 4) == 1 and codes() == [0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33] and q.r8(pk + 0x30) == 0,
+      (q.r8(PSTATE + 4), [hex(c) for c in codes()], q.r8(pk + 0x30)))
+marks = []
+q.stub(0x0805D1F0, lambda uc, a: marks.append((a[0], a[1])))
+m = q.new(8)
+q.w32(m, 0x080BF4CC)
+q.w16(m + 4, 0x32)
+q.call(0x080732D6, pk, m)
+q.w16(m + 4, 0x02)
+q.call(0x080732D6, pk, m)
+check("picker 'mark selected' on page 1: pad 0x32 marks tile row 1 col 2, pad 0x02 (page 0) marks nothing",
+      marks == [(pk + 0x34 + 0x2B0 + 2 * 0xAC, 1)], [(hex(a), b) for a, b in marks])
+plays = []
+q.stub(0x0805D304, lambda uc, a: plays.append((a[0], a[1])))
+q.w16(m + 4, 0x31)
+q.call(0x08073312, pk, m)
+check("picker 'mark playing' on page 1: only the tile of pad 0x31 (row 1 col 1)",
+      [a for a, b in plays if b] == [pk + 0x34 + 0x2B0 + 0xAC] and len(plays) == 8, plays)
 
 print(f"\n{'FAILED: ' + str(failures) if failures else 'all passed'}")

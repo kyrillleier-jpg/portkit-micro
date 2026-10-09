@@ -285,3 +285,31 @@ pk8: Mixer-Feld +0x14 = PAGE_CMD 0x7F01, Wrapper um Mixer vt+0x30 (0x080C0690 �
 (0x08076AF0) im Titel-Bau 0x080769E0 → padpages_title ("Pads 1-8" / "FX 9-16"; snprintf 0x080BCD58).
 Unicorn: echter Klickweg (echter Mixer-Ctor, echte Loslass-Methode → Ereignis 2 → Wrapper) schaltet um; Titel mit echtem
 snprintf. 32 Checks gruen.
+
+## Hardware-Test pk8 und Build pk9 (2026-10-09)
+
+pk8 am Geraet: Umschalten und Anzeigen funktionieren. Fehler: auf Seite 2 zeigen die Kacheln Spielzustand und
+Fortschrittsbalken von Pad 1-8 ("Slot 1 gestartet → Balken auf Slot 9"), wirkte wie "startet immer Seite 1".
+Ursache: die periodischen Zeichen-Methoden (vt+0x00) fragen den Zustand per 0x08078B94 mit festen Adressen ab:
+Pads 0x08084838 und Effects 0x08086B50 (Zeilen 0-1, `movs r7,#0; mov r6,r7` → Thunk loop_rows: r6 = 2·Seite << 4),
+Mixer 0x08069DD0 (16 Kacheln, Zeile = Kachelzeile; `orr.w r3, r7, r4` → loop_d_code: (r7 ^ Seite << 5) | Spalte).
+Touch-Weg geprueft: Kachel nimmt keine Touches (vt+0x1C = 0x0805D3AC → 0), ihr Innen-Widget +0x70 (Klasse 0x080BFD80)
+schon; es meldet Druecken/Loslassen an die Kachel, die Ereignis 3/4 mit **ihrer ID** an die App schickt (Container
+0x08070790 → Dispatcher; 3 → 0x0807E2F8: Pad waehlen + Engine-Ausloesung aus der Adresse, 4 → 0x08093838). Ausloesen
+ist also ID-basiert und auf Seite 2 richtig.
+Unicorn: echte Zeichen-Methoden fragen auf Seite 1 die Pads 9-16 ab (Mixer: sichtbare Zeilen). 35 Checks gruen.
+
+## Pad-Waehler, Build pkA (2026-10-09)
+
+Pad-Waehler (Pop-up der Slot-Seiten, Raster-Icon): Klasse mit Ctor 0x080733B4 (8 Konstruktionen: 0x0806CC48, 0x0806CC58,
+0x0806E25E, 0x0807237E, 0x08082602, 0x0808747E, 0x08090BF0, 0x080922DC), vtable 0x080C5C8C. Kacheln (kleine Buttons,
+Ctor 0x0805D2DC, 0xAC Bytes) bei +0x34 + Zeile·0x2B0 + Spalte·0xAC, Adresse +0xA4; Text-Widget +0x594; Anker +0x634.
+Platzieren 0x080734D6 (Kacheln 64x64, Abstand 66, 264 breit, x auf den Bildschirm geklemmt; am Geraet x = 56).
+Eingabe vt+0x30 = 0x08073254: Klick (Ereignis 2, Adresse +8) → 0x118 nach oben, dann zu. "Gewaehlt markieren"
+0x080732D6 (Pruefung Zeile < 2, Kachel aus Adresse), "spielt markieren" 0x08073312 (feste Adressen), Marken loeschen
+0x080732B0.
+pkA: Ctor-Wrapper (Instanzen, Umschalter = Text-Widget mit PAGE_CMD, klickbar, Kind des Waehlers; Liste beim Pads-Ctor
+geleert), Platzieren: letzter set_rect (0x08073564) → Umschalter neben die Kacheln auf die breitere freie Seite (max 54),
+Eingabe-Wrapper (Klick PAGE_CMD → Seite um, Waehler bleibt offen), Thunks picker_sel_tst / picker_mark0 / picker_mark1,
+set_page schreibt die Kachel-Adressen aller Waehler um und markiert neu. Unicorn inkl. echtem Ctor, Platzieren, Klickweg:
+40 Checks gruen.

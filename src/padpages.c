@@ -24,6 +24,9 @@
  * Selecting a pad is app command 0x63 (0x08075984: app + 0x14 = selected pad, notification 0x63); 0x111 selects an
  * effect cell (app + 0x28) and was wrongly used up to pk5.
  * On the Effects screen a second touch on the already selected effect cell (DLY / RVB, app + 0x28) toggles the page.
+ * The pad picker (the small 2 x 4 grid the slot screens open from their grid icon) follows the page too: its tile
+ * addresses are rewritten, its "selected" / "playing" marks get the page (padpages_thunk.S), and it gets a toggle of its
+ * own, a text widget beside its tiles ("1-8" / "9-16"; click → event 2 with PAGE_CMD to the picker).
  * Not in this build: MIDI and gate inputs for pads 9-16.
  */
 #include <stdint.h>
@@ -66,6 +69,26 @@ typedef int (*vis_fn)(void *scr, const void *msg);
 
 typedef void (*text_fn)(void *w, const char *text);
 #define fw_set_text   ((text_fn)FN(0x0805d1dc))      /* copies the text, then relayouts / redraws (vt+0x3c) */
+typedef void *(*alloc_fn)(unsigned size, unsigned n);
+typedef void (*obj_fn)(void *obj);
+typedef void (*child_fn)(void *parent, void *child);
+typedef void (*int_fn)(void *obj, int v);
+struct rect {
+    int32_t x, y, w, h;
+};
+typedef void (*rect_fn)(void *w, const struct rect *r);
+#define fw_alloc      ((alloc_fn)FN(0x08042dc0))     /* the firmware's allocator, as the screens use it */
+#define fw_text_ctor  ((obj_fn)FN(0x0805d124))       /* text widget, as "Keys" / "Stop" (0xa0 bytes) */
+#define fw_add_child  ((child_fn)FN(0x08060d30))
+#define fw_set_rect   ((rect_fn)FN(0x0805cb36))      /* widget: set rect (non-virtual, as the picker uses it) */
+#define TEXT_SIZE     0xa0
+#define TEXT_CLICKABLE 0x9c                           /* text widget: clicks reported only when != 0 */
+#define MAX_PICKERS   8
+#define fw_picker_input  ((vis_fn)FN(0x08073254))     /* pad picker: input events (vtable +0x30) */
+#define fw_picker_clear  ((obj_fn)FN(0x080732b0))     /* pad picker: clear all marks */
+#define fw_picker_select ((scr_fn)FN(0x080732d6))     /* pad picker: mark the selected pad (msg: lit, address @+4) */
+#define PICKER_TILES  0x34                            /* + row * 0x2b0 + col * 0xac, address at +0xa4 */
+#define PICKER_ANCHOR 0x634                           /* {x, y} the picker was opened at */
 #define APP           ((volatile uint8_t *)0x24013cb0u)   /* the app object (as in filter.c) */
 #define APP_SELECTED  0x14                            /* app + 0x14: selected pad (0x08075984) */
 #define APP_FX_CELL   0x28                            /* app + 0x28: selected effect cell (0x0807b20c) */
@@ -88,12 +111,14 @@ struct pstate {
     uint16_t pad1;
     uint8_t *inst[3];            /* screen objects: A (Effects), B (Pads), D (Mixer?) */
     uint8_t *ind2;               /* page label / toggle on the Mixer screen */
+    uint8_t *picker[MAX_PICKERS];/* pad pickers */
+    uint8_t *ptog[MAX_PICKERS];  /* ... and their toggles */
 };
 #define ST     ((volatile struct pstate *)0x2406c110u)
 #define PMAGIC 0x50414745u       /* "PAGE" */
 enum { SCR_A, SCR_B, SCR_D };
 
-_Static_assert(sizeof(struct pstate) == 0x1c, "thunks read page at +4");
+_Static_assert(sizeof(struct pstate) == 0x5c, "thunks read page at +4");
 
 static unsigned page(void)
 {
@@ -137,6 +162,8 @@ void padpages_ctor(unsigned which, uint8_t *scr)
     if (ST->magic != PMAGIC) {
         ST->inst[0] = ST->inst[1] = ST->inst[2] = 0;
         ST->ind2 = 0;
+        for (unsigned i = 0; i < MAX_PICKERS; i++)
+            ST->picker[i] = ST->ptog[i] = 0;
         ST->magic = PMAGIC;
     }
     ST->page = 0;                /* a fresh screen has the stock ids: pads 1-8 */
@@ -145,6 +172,9 @@ void padpages_ctor(unsigned which, uint8_t *scr)
     ST->last_sel = 0xffff;
     if (which < 3)
         ST->inst[which] = scr;
+    if (which == SCR_B)          /* the UI manager builds the Pads screen before every screen that owns a pad picker */
+        for (unsigned i = 0; i < MAX_PICKERS; i++)
+            ST->picker[i] = ST->ptog[i] = 0;
     if (which == SCR_D)
         make_mixer_toggle(scr);
 }
@@ -199,6 +229,28 @@ static void refresh(unsigned which)
         }
 }
 
+/* --- pad picker --------------------------------------------------------------------------------------------------- */
+static const char *short_label(void)
+{
+    return page() ? "9-16" : "1-8";
+}
+
+/* The picker's tiles get the page's addresses, its toggle the label; the selected mark is redone. */
+static void picker_page(unsigned i)
+{
+    uint8_t *pk = ST->picker[i];
+    unsigned p = page();
+    for (unsigned r = 0; r < 2; r++)
+        for (unsigned c = 0; c < 4; c++)
+            *(volatile uint16_t *)(pk + PICKER_TILES + r * 0x2b0u + c * 0xacu + 0xa4u) =
+                (uint16_t)(((2u * p + r) << 4) | c);
+    if (ST->ptog[i])
+        fw_set_text(ST->ptog[i], short_label());
+    fw_picker_clear(pk);
+    struct pmsg m = {MSG_LIT, *(volatile uint16_t *)(APP + APP_SELECTED), 0};
+    fw_picker_select(pk, &m);
+}
+
 static void set_page(unsigned p)
 {
     p &= 1u;
@@ -220,6 +272,9 @@ static void set_page(unsigned p)
     refresh(SCR_D);
     if (ST->ind2)
         fw_set_text(ST->ind2, page_label());
+    for (unsigned i = 0; i < MAX_PICKERS; i++)
+        if (ST->picker[i])
+            picker_page(i);
 }
 
 static void select_pad(void *scr, unsigned code)
@@ -334,4 +389,74 @@ int padpages_d_input(void *scr, const struct note *n)
 int padpages_title(char *buf, unsigned size, const char *name)
 {
     return fw_snprintf(buf, size, "%s %s", name, page() ? "9-16" : "1-8");
+}
+
+/* Constructor wrapper (padpages_thunk.S: ctor_picker): remember the picker, give it a toggle (text widget, a child of
+   the picker, clickable, click command PAGE_CMD). Its place is set whenever the picker is placed (padpages_picker_place). */
+void padpages_picker(uint8_t *pk)
+{
+    if (ST->magic != PMAGIC) {
+        ST->inst[0] = ST->inst[1] = ST->inst[2] = 0;
+        ST->ind2 = 0;
+        for (unsigned i = 0; i < MAX_PICKERS; i++)
+            ST->picker[i] = ST->ptog[i] = 0;
+        ST->page = 0;
+        ST->magic = PMAGIC;
+    }
+    unsigned i = 0;
+    while (i < MAX_PICKERS && ST->picker[i] && ST->picker[i] != pk)
+        i++;
+    if (i == MAX_PICKERS)
+        return;
+    ST->picker[i] = pk;
+    uint8_t *w = fw_alloc(TEXT_SIZE, 1);
+    if (w) {
+        fw_text_ctor(w);
+        *(uint32_t *)(w + TEXT_CMD) = PAGE_CMD;
+        w[TEXT_CLICKABLE] = 1;
+        fw_add_child(pk, w);
+        fw_set_text(w, short_label());
+    }
+    ST->ptog[i] = w;
+}
+
+static int picker_index(const uint8_t *pk)
+{
+    for (unsigned i = 0; i < MAX_PICKERS; i++)
+        if (ST->picker[i] == pk)
+            return (int)i;
+    return -1;
+}
+
+/* Replaces the last call in the picker's placing (0x08073564: set_rect(picker + 0x594, {x, 0, 264, 64})): after it,
+   the toggle goes beside the tiles, on the wider free side of the 320-pixel screen, up to 54 wide (on the device the
+   picker sits at the right edge, x = 56, so the toggle fills the gap at the left; the UI is turned by 180 degrees
+   there). Tiles: rows at anchor y - 0x84 and anchor y - 0x42, 64 high. */
+void padpages_picker_place(uint8_t *w594, const struct rect *r)
+{
+    fw_set_rect(w594, r);
+    uint8_t *pk = w594 - 0x594;
+    int i = picker_index(pk);
+    if (i < 0 || !ST->ptog[i])
+        return;
+    int32_t y = *(const int32_t *)(pk + PICKER_ANCHOR + 4) - 0x84;
+    int32_t left = r->x - 2, right = 320 - (r->x + r->w) - 2;
+    int32_t w = left >= right ? left : right;
+    if (w > 54)
+        w = 54;
+    if (w < 16)
+        return;                  /* no room: the toggle keeps its last place */
+    struct rect t = {left >= right ? r->x - 2 - w : r->x + r->w + 2, y, w, 130};
+    fw_set_rect(ST->ptog[i], &t);
+    picker_page((unsigned)i);
+}
+
+/* Picker input (vtable +0x30): its toggle's click flips the page and keeps the picker open. */
+int padpages_picker_input(void *pk, const struct note *n)
+{
+    if (n->id == 2 && *(const uint32_t *)((const uint8_t *)n + 0xc) == PAGE_CMD) {
+        toggle(0);
+        return 0;
+    }
+    return fw_picker_input(pk, n);
 }

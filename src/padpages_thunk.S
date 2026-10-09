@@ -56,6 +56,91 @@ row_d_r8_r3:                         /* 0x08069280  screen D: asr.w r8, r3, #4 *
     pop     {ip}
     bx      lr
 
+/* Periodic tile state (play state / progress) of the Pads (0x08084838) and Effects (0x08086b50) screens: their loop
+   over the 8 tiles asks for the fixed addresses of pads 1-8. `movs r7, #0; mov r6, r7` (0x08084842, 0x08086b5a) becomes
+   this thunk: r7 = 0 (tile row offset), r6 = 2 * page << 4 (first pad row). Flags are not live there. */
+    .global loop_rows
+    .thumb_func
+    .type loop_rows, %function
+loop_rows:
+    movs    r7, #0
+    ldr     r6, =PAGE_BYTE
+    ldrb    r6, [r6]
+    and     r6, r6, #1
+    lsls    r6, r6, #5
+    bx      lr
+
+/* The Mixer's (0x08069dd0) loop runs over its 16 tiles with pad row = tile row; with the swapped rows the pad is
+   (tile row ^ 2 * page) | col: `orr.w r3, r7, r4` (0x08069df8) becomes r3 = (r7 ^ (page << 5)) | r4. */
+    .global loop_d_code
+    .thumb_func
+    .type loop_d_code, %function
+loop_d_code:
+    ldr     r3, =PAGE_BYTE
+    ldrb    r3, [r3]
+    and     r3, r3, #1
+    eor     r3, r7, r3, lsl #5
+    orr     r3, r3, r4
+    bx      lr
+
+/* Pad picker (class ctor 0x080733b4; 2 x 4 small tiles: +0x34 + col * 0xac + row * 0x2b0, pad address at +0xa4).
+   picker_sel_tst replaces `tst.w r2, #0xe` (0x080732dc) in its "mark selected" (0x080732d6; r2 = address >> 4): Z set
+   and r2 -= 2 * page when the pad's row is on the current page, Z clear otherwise (the stock test: row < 2). */
+    .global picker_sel_tst
+    .thumb_func
+    .type picker_sel_tst, %function
+picker_sel_tst:
+    push    {r0, ip}
+    ldr     ip, =PAGE_BYTE
+    ldrb    ip, [ip]
+    and     ip, ip, #1
+    and     r0, r2, #0xe
+    cmp     r0, ip, lsl #1
+    bne     1f
+    sub     r2, r2, ip, lsl #1
+    cmp     r0, r0
+1:  pop     {r0, ip}
+    bx      lr
+
+/* "mark playing" (0x08073312) compares with the fixed addresses of pads 1-8: `uxth r3, r4; cmp r1, r3` (0x0807331e)
+   and `orr r3, r4, #0x10` (0x0807332e) get the page's rows. */
+    .global picker_mark0
+    .thumb_func
+    .type picker_mark0, %function
+picker_mark0:
+    ldr     r3, =PAGE_BYTE
+    ldrb    r3, [r3]
+    and     r3, r3, #1
+    orr     r3, r4, r3, lsl #5
+    uxth    r3, r3
+    cmp     r1, r3
+    bx      lr
+
+    .global picker_mark1
+    .thumb_func
+    .type picker_mark1, %function
+picker_mark1:
+    ldr     r3, =PAGE_BYTE
+    ldrb    r3, [r3]
+    and     r3, r3, #1
+    orr     r3, r4, r3, lsl #5
+    orr     r3, r3, #0x10
+    bx      lr
+
+/* Pad picker constructor wrapper: run 0x080733b4, then padpages_picker(this). */
+    .global ctor_picker
+    .thumb_func
+    .type ctor_picker, %function
+ctor_picker:
+    push    {r0, lr}
+    ldr     ip, =0x080733b5
+    blx     ip
+    pop     {r1, ip}
+    push    {r0, ip}
+    mov     r0, r1
+    bl      padpages_picker
+    pop     {r0, pc}
+
 /* Constructor wrappers, at the UI manager's constructor calls (0x08085140 B, 0x0808519c D, 0x080851c4 A): run the
    stock constructor with r0-r3 unchanged, then padpages_ctor(which, this). Returns the constructor's r0. */
     .macro CTOR name, stock, which
