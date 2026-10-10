@@ -180,4 +180,57 @@ left_arrow:
     ldr     ip, =0x080837e9
     bx      ip
 
+/* Effects screen: the FX2 send id 0xbc becomes FX3 Send (0x1c8) while its right cell shows FX3 (pstate +5). Five
+   two-instruction sites (flags are not live at any of them):
+     0x08086336 movs r2, #0xbc; mov r1, r4      (tile indicator query)      -> fx3id_r2_r1r4
+     0x08086376 ldr r2, [sp, #4]; movs r1, #0xbc (send display update)      -> fx3id_r1_r2sp4
+     0x080864be movs r2, #0xbc; mov r1, r5      (tile pressed: value query) -> fx3id_r2_r1r5
+     0x080864ce movs r1, #0xbc; mov r0, r7      (tile pressed: display)     -> fx3id_r1_r0r7
+     0x08086542 ldr r1, [sp]; movs r0, #0xbc    (tile pressed: knob)        -> fx3id_r0_r1sp */
+    .equ FX3_BYTE, 0x2406c115
+
+    .macro FX3ID rd
+    ldr     ip, =FX3_BYTE
+    ldrb    ip, [ip]
+    cmp     ip, #0
+    ite     eq
+    moveq   \rd, #0xbc
+    movwne  \rd, #0x1c8
+    .endm
+
+    .global fx3id_r2_r1r4
+    .thumb_func
+fx3id_r2_r1r4:
+    mov     r1, r4
+    FX3ID   r2
+    bx      lr
+
+    .global fx3id_r1_r2sp4
+    .thumb_func
+fx3id_r1_r2sp4:
+    ldr     r2, [sp, #4]
+    FX3ID   r1
+    bx      lr
+
+    .global fx3id_r2_r1r5
+    .thumb_func
+fx3id_r2_r1r5:
+    mov     r1, r5
+    FX3ID   r2
+    bx      lr
+
+    .global fx3id_r1_r0r7
+    .thumb_func
+fx3id_r1_r0r7:
+    mov     r0, r7
+    FX3ID   r1
+    bx      lr
+
+    .global fx3id_r0_r1sp
+    .thumb_func
+fx3id_r0_r1sp:
+    ldr     r1, [sp]
+    FX3ID   r0
+    bx      lr
+
     .ltorg

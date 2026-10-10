@@ -2,7 +2,7 @@
 real reverb state init 0x080a9c94 and plate core 0x080a9ec4 (Type Plate bit-identical), impulse responses of Room /
 Hall / Chamber (decay time, stereo, stability), the page filter, and the cost per block.
 
-  python3 -I tests/test_reverb.py      (after ./build.sh and patch.py fidelity pages padpages sound reverb cave)
+  python3 -I tests/test_reverb.py      (after ./build.sh and patch.py fidelity pages padpages sound reverb fx3 cave)
 """
 import math
 import os
@@ -39,8 +39,8 @@ del e.stubs[0x08069E7C], e.stubs[0x08069ED4]
 t = lists.get(0x178)
 check("Type list: Plate, Room, Hall, Chamber (label Type:, xml stays fx2algo's slot)",
       t and t[0] == "Type:" and [e.cstr(e.r32(t[1] + 4 * k)) for k in range(t[2])] == ["Plate", "Room", "Hall", "Chamber"])
-check("ten settings registered: ids 0x191-0x19a, 0..1000",
-      [k[0] for k in knobs] == list(range(0x191, 0x19B)) and all(k[1] == 8 and k[3] == 0 and k[4] == 1000 for k in knobs),
+check("eleven settings registered: ids 0x191-0x19b (Level last), 0..1000",
+      [k[0] for k in knobs] == list(range(0x191, 0x19C)) and knobs[-1][2] == "Level:" and all(k[1] == 8 and k[3] == 0 and k[4] == 1000 for k in knobs),
       knobs)
 
 # --- reverb cell record (type 0x44): Type first, stock three, then the settings
@@ -50,9 +50,9 @@ e.call(0x08089FC4, REC, typ)
 cnt, ent = struct.unpack("<H", e.mu.mem_read(REC + 0xA, 2))[0], e.r32(REC + 4)
 ids = [struct.unpack("<H", e.mu.mem_read(ent + 8 * k, 2))[0] for k in range(cnt)]
 vals = [e.r32(ent + 8 * k + 4) for k in range(cnt)]
-check("reverb record: Type, Decay, Predelay, Damping, then Size .. Lo Cut with defaults",
-      ids == [0x178, 0x1A, 0x1E, 0x1D] + list(range(0x191, 0x19B))
-      and vals == [0, 600, 40, 500, 500, 700, 500, 400, 300, 400, 300, 1000, 800, 100], (ids, vals))
+check("reverb record: Type, Decay, Predelay, Damping, then Size .. Lo Cut, Level with defaults",
+      ids == [0x178, 0x1A, 0x1E, 0x1D] + list(range(0x191, 0x19C))
+      and vals == [0, 600, 40, 500, 500, 700, 500, 400, 300, 400, 300, 1000, 800, 100, 500], (ids, vals))
 
 def setp(pid, v):
     e.call(0x080894FA, REC, pid, v)
@@ -178,7 +178,7 @@ def page_ids(tval):
     setp(0x178, tval)
     lst = e.new(4 + 12 * 0x30)
     def fill(uc):
-        pids = [0x178, 0x1A, 0x1E, 0x1D] + list(range(0x191, 0x19B))
+        pids = [0x178, 0x1A, 0x1E, 0x1D] + list(range(0x191, 0x19C))
         e.w32(lst, len(pids))
         for k, pid in enumerate(pids):
             e.mu.mem_write(lst + 4 + 12 * k, struct.pack("<HHHHI", pid, 0, 0, 0, 0))
@@ -190,8 +190,35 @@ def page_ids(tval):
     e.call(SYM["clip_page"], APP, m, lst, 0)
     del e.stubs[0x08076D8C]
     return [struct.unpack_from("<H", e.mu.mem_read(lst + 4 + 12 * k, 2))[0] for k in range(e.r32(lst))]
-check("reverb page: Plate shows Type + stock three; Hall shows all 14",
-      page_ids(0) == [0x178, 0x1A, 0x1E, 0x1D] and len(page_ids(2)) == 14)
+check("reverb page: Plate shows Type + stock three + Level; Hall shows all 15",
+      page_ids(0) == [0x178, 0x1A, 0x1E, 0x1D, 0x19B] and len(page_ids(2)) == 15)
+
+# Level: -12 / 0 / +12 dB on the plate (stock core, scaled after it)
+def level_peak(v):
+    setp(0x19B, v)
+    setp(0x178, 0)
+    st = new_state()
+    L, R = run(st, [1.0] + [0.0] * (N * 20 - 1))
+    setp(0x19B, 500)
+    return max(abs(x) for x in L + R)
+p0, p5, p10 = level_peak(0), level_peak(500), level_peak(1000)
+check("Level 0 / 500 / 1000: -12 / 0 / +12 dB (+-0.3 dB)",
+      abs(20 * math.log10(p0 / p5) + 12) < 0.3 and abs(20 * math.log10(p10 / p5) - 12) < 0.3,
+      (20 * math.log10(p0 / p5), 20 * math.log10(p10 / p5)))
+
+# loudness against the plate: noise in, steady RMS within 1.5 dB for every type
+import random as _r
+_r.seed(5)
+noise = [_r.uniform(-0.5, 0.5) for _ in range(FS // 2)]
+noise = noise[: len(noise) // N * N]
+lv = {}
+for name, t in (("Plate", 0), ("Room", 1), ("Hall", 2), ("Chamber", 3)):
+    setp(0x178, t)
+    L, R = run(new_state(decay=0.55, damp=0.4), noise)
+    lv[name] = 10 * math.log10(sum(v * v for v in L[FS // 4:] + R[FS // 4:]) / len(L[FS // 4:] + R[FS // 4:]))
+print("     levels (dB, steady):", {k: round(v, 1) for k, v in lv.items()})
+check("Room / Hall / Chamber within 1.5 dB of the plate (make-up gains)",
+      all(abs(lv[k] - lv["Plate"]) < 1.5 for k in ("Room", "Hall", "Chamber")), lv)
 
 # --- cost: instructions per 64-frame block at 29.8 kHz
 cnt = [0]

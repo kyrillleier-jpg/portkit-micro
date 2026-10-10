@@ -52,6 +52,9 @@ struct cmd {                     /* a command to the app, as the Pads screen pos
 #define CMD_LIT    0x080bee0cu
 #define CMD_SELECT 0x63      /* "select pad" (0x08075984); 0x111 selects an effect cell */
 
+void fx3_init(void);             /* fx3.c */
+void fx3_record_ensure(void);
+
 struct note {                    /* a notification from the app to a screen: id, listener, pad address */
     uint16_t id, pad0;
     uint32_t lit;
@@ -108,7 +111,8 @@ typedef int (*snprintf_fn)(char *buf, unsigned size, const char *fmt, ...);
 struct pstate {
     uint32_t magic;
     uint8_t page;                /* 0: pads 1-8, 1: pads 9-16; read by the thunks at +4 */
-    uint8_t touch;               /* unused since pkB (was: the next selection change comes from a touch) */
+    uint8_t fx3;                 /* Effects screen: its right cell is FX3 (0x320) instead of RVB (0x310); read by the
+                                    send-id thunks at +5 */
     uint8_t busy;                /* inside a page switch */
     uint8_t pad0;
     uint16_t last_sel;           /* last pad selected by a page toggle */
@@ -170,7 +174,7 @@ void padpages_ctor(unsigned which, uint8_t *scr)
         ST->magic = PMAGIC;
     }
     ST->page = 0;                /* a fresh screen has the stock ids: pads 1-8 */
-    ST->touch = 0;
+    ST->fx3 = 0;
     ST->busy = 0;
     ST->last_sel = 0xffff;
     if (which < 3)
@@ -180,6 +184,8 @@ void padpages_ctor(unsigned which, uint8_t *scr)
             ST->picker[i] = 0;
     if (which == SCR_D)
         make_mixer_toggle(scr);
+    if (which == SCR_A)
+        fx3_init();
 }
 
 /* --- guards: replace the stock guarded entries at their call sites ------------------------------------------------ */
@@ -321,15 +327,42 @@ void padpages_b_notify(void *scr, const struct note *n)
         refresh(SCR_B);
 }
 
-/* --- Effects screen (A): a second touch on the selected effect cell toggles the page; refresh on "all new" --------- */
+/* --- Effects screen (A): a second touch on the selected right cell switches it RVB <-> FX3 (pages: left arrow) ----- */
+#define FX_RVB   0x310
+#define FX_FX3   0x320
+#define RVB_TILE 0xed4                                 /* the right cell (button, id at +0x38, label 0x0805dcdc) */
+typedef void (*label_fn)(void *tile, const char *name);
+#define fw_tile_label ((label_fn)FN(0x0805dcdc))
+#define CMD_FX_CELL 0x111                              /* "select effect cell" (0x0807b20c: app + 0x28) */
+
+static void fx3_switch(uint8_t *scr, unsigned on)
+{
+    fx3_record_ensure();
+    ST->fx3 = (uint8_t)on;
+    uint8_t *tile = scr + RVB_TILE;
+    *(volatile uint16_t *)(tile + 0x38) = (uint16_t)(on ? FX_FX3 : FX_RVB);
+    fw_tile_label(tile, on ? "FX3" : "RVB");
+    struct cmd c = {CMD_FX_CELL, 0, CMD_LIT, (uint16_t)(on ? FX_FX3 : FX_RVB), 0, {0, 0, 0}};
+    fw_post_cmd(scr, &c);
+    refresh(SCR_A);                                    /* tiles: second send indicator */
+    unsigned sel = *(volatile uint16_t *)(scr + 0x1bd4);       /* the screen's selected pad: displays and knob */
+    if ((sel & 0x1f00u) == 0 && col_of(sel) < 4 && row_of(sel) < 4) {
+        struct pmsg m = {MSG_LIT, (uint16_t)sel, 0};
+        fw_a_touch_body(scr, &m);
+    }
+}
+
 int padpages_a_input(void *scr, const struct note *n)
 {
-    if (n->id == 3 && ((n->code >> 8) & 0x1fu) == 3 && n->code == *(volatile uint16_t *)(APP + APP_FX_CELL)) {
-        toggle(scr);
+    unsigned cell = *(volatile uint16_t *)(APP + APP_FX_CELL);
+    if (n->id == 3 && ST->magic == PMAGIC && (n->code == FX_RVB || n->code == FX_FX3) && n->code == cell) {
+        fx3_switch(scr, n->code == FX_RVB);
         return 0;
     }
     return fw_a_input(scr, n);
 }
+
+/* padpages_thunk.S: the Effects screen's FX2 send id (0xbc) at five places -> FX3 Send (0x1c8) while FX3 is shown */
 
 void padpages_a_notify(void *scr, const struct note *n)
 {
@@ -364,6 +397,10 @@ int padpages_left(uint8_t *obj)
         return 0;
     if (obj[SCREEN_ID] == 2) {
         toggle(ST->inst[SCR_B]);
+        return 1;
+    }
+    if (obj[SCREEN_ID] == 0x30 && ST->inst[SCR_A]) {          /* Effects screen */
+        toggle(ST->inst[SCR_A]);
         return 1;
     }
     if (picker_open()) {

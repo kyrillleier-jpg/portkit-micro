@@ -11,7 +11,7 @@
  *
  * Type is the unused list 0x178 ("FX2": Delay / Reverb, registered at 0x0806b89a, no other use; the global engine
  * handler 0x080a6c3c ignores it), re-registered as "Type:" and put first into the reverb cell's record (type 0x44,
- * defaults at 0x08089aa0). The other settings (0x191 .. 0x19a, above the engine's range) follow the stock three, so the
+ * defaults at 0x08089aa0). The other settings (0x191 .. 0x19b, above the engine's range) follow the stock three, so the
  * cell's settings pages (built from the record in order, 0x08083744) show them; with Type = Plate they are hidden
  * (clip_page, src/clipshift.c). Stock firmware ignores the new values and plays its plate.
  *
@@ -56,6 +56,7 @@ typedef int (*store_get_fn)(const void *store, unsigned param);
 #define P_WIDTH  0x198
 #define P_HICUT  0x199
 #define P_LOCUT  0x19a
+#define P_LEVEL  0x19b             /* output level -12 .. +12 dB (500 = 0 dB), every type, Plate too */
 
 enum { ALG_PLATE, ALG_ROOM, ALG_HALL, ALG_CHAMBER, ALGS };
 static const char *const type_names[ALGS] = {"Plate", "Room", "Hall", "Chamber"};
@@ -72,6 +73,7 @@ static const struct pdef pdefs[] = {
     {P_WIDTH, 1000, "Width:", "rvbwidth"},
     {P_HICUT, 800, "Hi Cut:", "rvbhicut"},
     {P_LOCUT, 100, "Lo Cut:", "rvblocut"},
+    {P_LEVEL, 500, "Level:", "rvblevel"},
 };
 #define NPARAMS ((int)(sizeof pdefs / sizeof pdefs[0]))
 
@@ -145,25 +147,30 @@ static const struct { uint8_t word; uint16_t len; } bufs[12] = {
 /* settings of the cell, all 0..1 (Type as index) */
 struct settings {
     unsigned type;
-    float size, diff, bass, xover, rate, depth, early, width, hicut, locut;
+    float size, diff, bass, xover, rate, depth, early, width, hicut, locut, level;
 };
+
+static void read_record(const void *rec, struct settings *s)
+{
+    unsigned t = (unsigned)fw_store_get(rec, P_TYPE);
+    s->type = t < ALGS ? t : ALG_PLATE;
+    float *dst[NPARAMS] = {&s->size, &s->diff, &s->bass, &s->xover, &s->rate, &s->depth, &s->early, &s->width,
+                           &s->hicut, &s->locut, &s->level};
+    for (int k = 0; k < NPARAMS; k++)
+        *dst[k] = clamp01((float)fw_store_get(rec, pdefs[k].id) * 0.001f);
+}
 
 static void read_settings(const uint8_t *obj, struct settings *s)
 {
     s->type = ALG_PLATE;
+    s->level = 0.5f;
     if (!obj)
         return;
     uint32_t id = *(const uint32_t *)(obj + OBJ_ID);
     unsigned row = (id >> 8) & 0xff;
     if ((id >> 16) != 3 || row >= 5)
         return;
-    const void *rec = (const void *)(APP_FX + row * 0x18u);
-    unsigned t = (unsigned)fw_store_get(rec, P_TYPE);
-    s->type = t < ALGS ? t : ALG_PLATE;
-    float *dst[NPARAMS] = {&s->size, &s->diff, &s->bass, &s->xover, &s->rate, &s->depth, &s->early, &s->width,
-                           &s->hicut, &s->locut};
-    for (int k = 0; k < NPARAMS; k++)
-        *dst[k] = clamp01((float)fw_store_get(rec, pdefs[k].id) * 0.001f);
+    read_record((const void *)(APP_FX + row * 0x18u), s);
 }
 
 /* --- state (patch RAM, device memory: copied in / out once per block) ------------------------------------------------ */
@@ -183,11 +190,12 @@ struct rstate {
     float rlp[8];
     uint32_t rlfo[4];
 };
-#define RS ((volatile struct rstate *)0x2406d000u)     /* after the WSOLA grain states (0x2406c400 .. 0x2406cdff) */
+#define RS1 ((volatile struct rstate *)0x2406d000u)    /* reverb cell; after the WSOLA grain states (..0x2406cdff) */
+#define RS2 ((volatile struct rstate *)0x2406d100u)    /* FX3 (src/fx3.c) */
 #define RMAGIC 0x52564231u             /* "RVB1" */
 _Static_assert(sizeof(struct rstate) <= 0x100, "reverb state fits its patch RAM slot");
 
-static void clear(float *state)
+static void clear(float *state, volatile struct rstate *RS)
 {
     for (int i = 0; i < 12; i++) {
         float *b = BUF(state, i);
@@ -202,6 +210,11 @@ static void clear(float *state)
     for (int k = 0; k < 4; k++)
         RS->rlfo[k] = (uint32_t)k * 0x40000000u;
 }
+
+/* Make-up gains: noise in, Decay 40 / 70 %, steady-state RMS against the stock plate (tests/test_reverb.py): Hall /
+   Chamber were ~3.2 dB, Room ~9 dB quieter. */
+#define TANK_GAIN 1.45f
+#define ROOM_GAIN 2.8f
 
 /* --- Hall / Chamber -------------------------------------------------------------------------------------------------- */
 /* Lengths at 29.8 kHz (Dattorro's figures at 29.761 kHz). Rings: input diffusers in buffers 0-3 (512), modulated
@@ -240,8 +253,8 @@ static inline __attribute__((always_inline)) float ring(const float *b, unsigned
     return a + f * (c - a);
 }
 
-static void tank_run(float *state, const struct tank *tk, const struct settings *st, const float *in, float *outl,
-                     float *outr, int n)
+static void tank_run(volatile struct rstate *RS, float *state, const struct tank *tk, const struct settings *st,
+                     const float *in, float *outl, float *outr, int n)
 {
     float *ap_in[4] = {BUF(state, 0), BUF(state, 1), BUF(state, 2), BUF(state, 3)};
     float *map_a = BUF(state, 4), *map_b = BUF(state, 5), *er = BUF(state, 6);
@@ -381,8 +394,8 @@ static void tank_run(float *state, const struct tank *tk, const struct settings 
                    + d2[(w8 - tr[3]) & 8191] - d3[(w8 - tr[4]) & 8191] - ap4[(w4 - tr[5]) & 4095]
                    - d4[(w8 - tr[6]) & 8191];
         float mid = 0.5f * (sl + sr), sd = 0.5f * (sl - sr) * side;
-        outl[i] = er_lvl * el + 0.6f * (mid + sd);
-        outr[i] = er_lvl * erv + 0.6f * (mid - sd);
+        outl[i] = TANK_GAIN * (er_lvl * el + 0.6f * (mid + sd));
+        outr[i] = TANK_GAIN * (er_lvl * erv + 0.6f * (mid - sd));
 
         w8++;
         w4++;
@@ -425,7 +438,8 @@ static inline __attribute__((always_inline)) float allpass(float *buf, unsigned 
     return y - g * w;
 }
 
-static void room(float *state, const struct settings *st, const float *in, float *outl, float *outr, int n)
+static void room(volatile struct rstate *RS, float *state, const struct settings *st, const float *in, float *outl,
+                 float *outr, int n)
 {
     float *er = BUF(state, 6);
     float *in_ap[4] = {BUF(state, 0), BUF(state, 1), BUF(state, 2), BUF(state, 3)};
@@ -525,8 +539,8 @@ static void room(float *state, const struct settings *st, const float *in, float
             sr += out_sign_r[k] * o[k];
         }
         float mid = 0.5f * (sl + sr), sd = 0.5f * (sl - sr) * side;
-        outl[i] = er_lvl * el + 0.3f * (mid + sd);
-        outr[i] = er_lvl * erv + 0.3f * (mid - sd);
+        outl[i] = ROOM_GAIN * (er_lvl * el + 0.3f * (mid + sd));
+        outr[i] = ROOM_GAIN * (er_lvl * erv + 0.3f * (mid - sd));
     }
     RS->er_pos = ep;
     RS->hc = hcs;
@@ -544,29 +558,52 @@ static void room(float *state, const struct settings *st, const float *in, float
 /* --- the core call ---------------------------------------------------------------------------------------------------- */
 #define RVB_OBJ (*(uint8_t *volatile *)0x2406cff0u)    /* set by reverb_core_thunk: the reverb object (r4 there) */
 
+/* one instance: Type switch clears the buffers, then the algorithm */
+static void run(volatile struct rstate *RS, float *state, const struct settings *st, const float *in, float *outl,
+                float *outr, int n)
+{
+    if (RS->magic != RMAGIC || RS->alg != st->type) {
+        clear(state, RS);
+        RS->alg = st->type;
+        RS->magic = RMAGIC;
+    }
+    switch (st->type) {
+    case ALG_ROOM:
+        room(RS, state, st, in, outl, outr, n);
+        break;
+    case ALG_HALL:
+        tank_run(RS, state, &hall, st, in, outl, outr, n);
+        break;
+    case ALG_CHAMBER:
+        tank_run(RS, state, &chamber, st, in, outl, outr, n);
+        break;
+    default:
+        fw_plate_core(state, in, outl, outr, n);
+    }
+    /* Level: -12 .. +12 dB (2 ^ (x x 4 - 2)), 0 dB at 500 */
+    if (st->level != 0.5f) {
+        float g = exp2_fast(st->level * 3.9863f - 1.9932f);
+        for (int i = 0; i < n; i++) {
+            outl[i] *= g;
+            outr[i] *= g;
+        }
+    }
+}
+
 /* Replaces the core call in the reverb's process (bl at 0x080a9912), via reverb_core_thunk. */
 void reverb_core(float *state, const float *in, float *outl, float *outr, int n)
 {
     struct settings st;
     read_settings(RVB_OBJ, &st);
-    if (RS->magic != RMAGIC || RS->alg != st.type) {
-        clear(state);
-        RS->alg = st.type;
-        RS->magic = RMAGIC;
-    }
-    switch (st.type) {
-    case ALG_ROOM:
-        room(state, &st, in, outl, outr, n);
-        break;
-    case ALG_HALL:
-        tank_run(state, &hall, &st, in, outl, outr, n);
-        break;
-    case ALG_CHAMBER:
-        tank_run(state, &chamber, &st, in, outl, outr, n);
-        break;
-    default:
-        fw_plate_core(state, in, outl, outr, n);
-    }
+    run(RS1, state, &st, in, outl, outr, n);
+}
+
+/* FX3 (src/fx3.c): a plate state of its own, settings from an FX cell record; Decay and Damping already in state[0..1] */
+void reverb_run_record(float *state, const void *rec, const float *in, float *outl, float *outr, int n)
+{
+    struct settings st;
+    read_record(rec, &st);
+    run(RS2, state, &st, in, outl, outr, n);
 }
 
 /* the cell's Type, for the page filter (clip_page): record of an FX address (layer 3, row) */
@@ -576,5 +613,6 @@ unsigned reverb_type_of(const void *rec)
     return t < ALGS ? t : ALG_PLATE;
 }
 
-const uint16_t reverb_param_ids[NPARAMS + 1] = {P_SIZE, P_DIFF, P_BASS, P_XOVER, P_RATE, P_DEPTH, P_EARLY, P_WIDTH,
-                                                P_HICUT, P_LOCUT, 0};
+/* hidden with Type = Plate (Level stays: it works on the plate too) */
+const uint16_t reverb_param_ids[NPARAMS] = {P_SIZE, P_DIFF, P_BASS, P_XOVER, P_RATE, P_DEPTH, P_EARLY, P_WIDTH,
+                                            P_HICUT, P_LOCUT, 0};

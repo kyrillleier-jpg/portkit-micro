@@ -1,10 +1,10 @@
-"""Unicorn tests for patches/padpages.py on the patched image (out/fidelity+pages+padpages+sound+reverb+cave/MICRO.BIN).
+"""Unicorn tests for patches/padpages.py on the patched image (out/fidelity+pages+padpages+sound+reverb+fx3+cave/MICRO.BIN).
 
 Runs: the row thunks on their own (result, flags and registers preserved), the stock function bodies with the thunks in
 place (which tile they address on page 0 / 1), the page-aware guards, the constructor wrappers (stock constructors
 stubbed), and the page switch / encoder logic of the Pads screen with recorded calls. Drawing is not emulated.
 
-  python3 -I tests/test_padpages.py      (after ./build.sh and patch.py fidelity pages padpages sound reverb cave)
+  python3 -I tests/test_padpages.py      (after ./build.sh and patch.py fidelity pages padpages sound reverb fx3 cave)
 """
 import os
 import struct
@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "patches"))
 from thumb import BASE, bl_target, symbols  # noqa: E402
 
-IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+reverb+cave", "MICRO.BIN"), "rb").read()
+IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+reverb+fx3+cave", "MICRO.BIN"), "rb").read()
 SYM = symbols(os.path.join(ROOT, "out", "cave.elf"))
 RET, STACK = 0x24000000, 0x2407F000
 PSTATE = 0x2406C110
@@ -225,6 +225,9 @@ for stock in (0x08083E40, 0x080696E0, 0x080866B0):
     e.stub(stock, lambda uc, a: a[0])
 texts = []
 e.stub(0x0805D1DC, lambda uc, a: texts.append(bytes(e.mu.mem_read(a[1], 16)).split(b"\0")[0].decode()))
+fx3_calls = []
+e.stub(SYM["fx3_init"], lambda uc, a: fx3_calls.append("init"))            # FX3 memory: tests/test_fx3.py
+e.stub(SYM["fx3_record_ensure"], lambda uc, a: fx3_calls.append("record"))
 e.w32(PSTATE, 0)
 scrs = {"ctor_b": e.new(0x2000), "ctor_d": e.new(0x2600), "ctor_a": e.new(0x2000)}
 e.w32(scrs["ctor_d"] + 0x2AE8, 0x080BFC9C)   # the Mixer's text button that becomes the toggle
@@ -232,7 +235,8 @@ e.w8(PSTATE + 4, 1)
 rets = {name: e.call(SYM[name], s, 0x11, 0x22, 0x33) for name, s in scrs.items()}
 ok = all(rets[n] == scrs[n] for n in scrs) and e.r32(PSTATE) == 0x50414745 and e.r8(PSTATE + 4) == 0
 ok &= [e.r32(PSTATE + 0xC + 4 * k) for k in range(3)] == [scrs["ctor_a"], scrs["ctor_b"], scrs["ctor_d"]]
-check("constructor wrappers: stock ctor runs, this returned, screens remembered, page reset to 0", ok)
+check("constructor wrappers: stock ctor runs, this returned, screens remembered, page reset to 0; Effects: FX3 init",
+      ok and fx3_calls == ["init"], fx3_calls)
 m2 = e.r32(PSTATE + 0x18)
 check("Mixer: its text button at +0x2ae8 becomes the toggle: click command PAGE_CMD at +0x14, label 'Pads 1-8'",
       m2 == scrs["ctor_d"] + 0x2AE8 and e.r32(m2 + 0x14) == 0x7F01 and e.r32(m2) == 0x080BFC9C and texts == ["Pads 1-8"],
@@ -357,21 +361,52 @@ r1 = e.call(SYM["padpages_d_input"], D, click(0xBE))
 r2 = e.call(SYM["padpages_d_input"], D, note(3, 0x12))
 check("other Mixer events (other click commands, tile presses) go to the stock handler", (r1, r2) == (9, 9) and page() == p2 ^ 1)
 
-# --- Effects screen: second touch on the selected effect cell toggles ------------------------------------------------
+# --- Effects screen: second touch on the selected RVB cell switches it to FX3 and back; DLY stays stock -------------
 e.stub(0x080865E4, lambda uc, a: 5)
+labels, touches = [], []
+e.stub(0x0805DCDC, lambda uc, a: labels.append(bytes(e.mu.mem_read(a[1], 8)).split(b"\0")[0].decode()))
+e.stub(0x08086482, lambda uc, a: touches.append(e.r16(a[1] + 4)))
 APPX = 0x24013CB0
-e.w16(APPX + 0x28, 0x300)                # DLY selected
-e.w16(APPX + 0x14, 0x11 | (page() << 5))
+e.w16(A + 0xED4 + 0x38, 0x310)
+e.w16(A + 0x1BD4, 0x12)                   # the Effects screen's selected pad
+e.w16(APPX + 0x28, 0x300)                 # DLY selected
 p3 = page()
-del posts[:], texts[:]
+del posts[:], updates[:]
 r = e.call(SYM["padpages_a_input"], A, note(3, 0x300))
-check("Effects: touch on the selected cell (DLY) toggles, pad at the same place selected",
-      r == 0 and page() == p3 ^ 1 and posts == [(0x63, 0x11 | ((p3 ^ 1) << 5), 0x080BEE0C)], (r, page(), posts))
+check("Effects: second touch on DLY goes to the stock handler (no page switch any more)", r == 5 and page() == p3)
+e.w16(APPX + 0x28, 0x310)                 # RVB selected
+del posts[:], updates[:]
+r = e.call(SYM["padpages_a_input"], A, note(3, 0x310))
+check("Effects: second touch on RVB -> FX3: cell id 0x320, label FX3, cell selected (0x111), tiles and sends refreshed",
+      r == 0 and e.r16(A + 0xED4 + 0x38) == 0x320 and labels[-1:] == ["FX3"] and posts == [(0x111, 0x320, 0x080BEE0C)]
+      and e.r8(PSTATE + 5) == 1 and len(updates) == 8 and touches[-1:] == [0x12],
+      (r, hex(e.r16(A + 0xED4 + 0x38)), labels, posts, len(updates), touches))
+e.w16(APPX + 0x28, 0x320)
+del posts[:]
+r = e.call(SYM["padpages_a_input"], A, note(3, 0x320))
+check("Effects: second touch on FX3 -> back to RVB (0x310)", r == 0 and e.r16(A + 0xED4 + 0x38) == 0x310
+      and labels[-1:] == ["RVB"] and posts == [(0x111, 0x310, 0x080BEE0C)] and e.r8(PSTATE + 5) == 0)
 p4 = page()
+e.w16(APPX + 0x28, 0x300)
 r1 = e.call(SYM["padpages_a_input"], A, note(3, 0x310))   # RVB, not selected
 r2 = e.call(SYM["padpages_a_input"], A, note(3, 0x12))    # a pad tile
 r3 = e.call(SYM["padpages_a_input"], A, note(1, 0x300))   # another event
-check("Effects: other cell, pad tiles and other events go to the stock handler", (r1, r2, r3) == (5, 5, 5) and page() == p4)
+check("Effects: unselected cell, pad tiles and other events go to the stock handler", (r1, r2, r3) == (5, 5, 5) and page() == p4)
+
+# send id thunks: 0xbc while RVB, 0x1c8 while FX3
+def fx3id(name, fx3):
+    e.w8(PSTATE + 5, fx3)
+    e.call(SYM[name], 0xA0, 0xA1, 0xA2, 0xA3, regs=[(UC_ARM_REG_R4, 0xB4), (UC_ARM_REG_R5, 0xB5), (UC_ARM_REG_R7, 0xB7)])
+    return [e.mu.reg_read(r) for r in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2)]
+ok = (fx3id("fx3id_r2_r1r4", 0)[1:] == [0xB4, 0xBC] and fx3id("fx3id_r2_r1r4", 1)[1:] == [0xB4, 0x1C8]
+      and fx3id("fx3id_r2_r1r5", 1)[1:] == [0xB5, 0x1C8] and fx3id("fx3id_r1_r0r7", 1)[:2] == [0xB7, 0x1C8]
+      and fx3id("fx3id_r1_r0r7", 0)[:2] == [0xB7, 0xBC])
+e.w8(PSTATE + 5, 0)
+check("Effects send-id thunks: FX2 Send (0xbc) normally, FX3 Send (0x1c8) while FX3 is shown; moved registers kept", ok)
+p5 = page()
+went_on, r3_, r4_ = left(0x30, 0x13 | (p5 << 5))
+check("left arrow on the Effects screen: page toggles, pad at the same place selected, handler left",
+      not went_on and page() == p5 ^ 1 and posts[-1:] == [(0x63, 0x13 | ((p5 ^ 1) << 5), 0x080BEE0C)], (went_on, page(), posts))
 
 # --- periodic tile state loops (real code; state query 0x08078b94 recorded) -------------------------------------------
 def state_codes(fn, p, scr):

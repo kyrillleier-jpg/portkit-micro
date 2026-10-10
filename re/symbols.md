@@ -620,3 +620,43 @@ C1C0 Last, C400–CDFF WSOLA, CFF0 / D000 Reverb.
 Tests (`tests/test_reverb.py`, echter Init und Plate-Kern): Plate bitgleich, Impulsantworten (Hall RT60 0,55 / 3,6 s bei
 Decay 30 / 70 %), L/R-Korrelation ≈ 0, Stabilitaet bei vollem Decay, Bass Mult, Early, Seitenfilter. Aufwand: Plate
 ~9,5 M Instr./s, Hall/Chamber ~20 M, Room ~32 M (bei 29,8 kHz). Hoerproben out/reverb_preview (nicht im Repo).
+
+## FX3: dritter Send auf eigenem Bus (Build pkU, 2026-10-11)
+
+Wunsch: zweites Reverb parallel (Drums / Synths), eigener Send; Effects-Seite: Linkspfeil fuer die Pad-Seiten, zweites
+Tippen auf RVB schaltet die rechte Zelle RVB ↔ FX3.
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| Engine +0x150E4 | 18 Stereo-Busse × 20 Byte (0x080A82B8); weitere Arrays +0x1524C (0x080A82E0, Pad-Scratch 0/1/2), +0x1588C (0x080A82CC) | alle mit 128-Frame-Puffern (Ctor 0x08094C48, Puffer-Ctor 0x080A310C), pro Block still + Laenge (0x080A82F4) | vermutet |
+| Busse | 0–3 Out1/2 … Out7/8, 4–11 Out1 … Out8 (Liste 0x77), 0xD FX1, 0xE FX2, 0xF / 0x10 Sonderfall im Treiber; **0xC und 0x11 unbenutzt** | | vermutet |
+| 0x08096530 | Block-Treiber: Wurzel-Knoten engine+0xFAF8 (vtable+0xC), dann Bus 0 += 0xD (0x08096CF2), += 0xE (0x08096D04), Ausgaenge | | vermutet |
+| 0x08095CE8 | Graph-Aufbau: Knoten per laufendem Zaehler (+0x14) wiedergefunden oder angelegt; Reverb 0x30100 / Bus 0xE, Delay 0x30000 / Bus 0xD | nicht benutzt (FX3 ohne eigenen Knoten) | vermutet |
+| Sample-Pads 0x080B10BE | Sends pad+0x558 / +0x55C; „ein Send an“ 0x080B13E0; Scratch → Sends → Ausgang 0x080B2600 | | vermutet |
+| Clip-Pads 0x080B74F4 | Sends pad+0xB84 / +0xB88 (Setter 0x080B72D6 / 0x080B72B8, Wert / 1000 → 0x080A04C0); „ein Send an“ 0x080B7D8C; Endmischung 0x080B8046 | | vermutet |
+| Puffer | 0x080A33EC(Ziel, Quelle, s0 Pegel) addieren; 0x080A3328 addieren; 0x080A3288 lesen (still → Nullen) | | durch Emulation bestaetigt |
+| 0x08042DC0 / 0x08042E44 | Bump-Allokator ohne Freigabe (Zeiger 0x24000088, Grenze 0x2400008C, oben Samples per 0x08042E58), freier Platz | Ueberlauf → 0x08040578 | vermutet |
+| Effects-Bildschirm | Zellen DLY +0xD34 / RVB +0xED4 (ID +0x38, Beschriftung im Ctor 0x080869E2 per 0x0805DCDC), Send-Anzeigen +0x1554 / +0x1600, Encoder-Regler +0x1BE8 / +0x1EC0 (0x08073810), gewaehltes Pad +0x1BD4; 0xBC an 0x08086336, 0x08086376, 0x080864BE, 0x080864CE, 0x08086542 | | vermutet |
+
+Umsetzung (`src/fx3.c`, `src/fx3_thunk.S`, `patches/fx3.py`, `src/padpages.c`):
+- Pad-Parameter 0x1C8 "FX3 Send:" (Typ 8, xml `fx3send`), Pad-Record 66 / 72.
+- Send-Abfragen 0x080B13E0 / 0x080B7D8C: s15 = 1,0 wenn FX1 0 und FX3 an; Endmischung 0x080B2600 / 0x080B8046: zuerst
+  Scratch × Kurve(FX3) → Bus 0xC.
+- Treiber 0x08096D04: nach Bus 0 += 0xE: Bus 0xC → Tiefpass, auf 29,8 kHz, Predelay, Reverb-Instanz 2
+  (`reverb_run_record`, Zustand RS2 0x2406D100, eigener Plate-Zustand), linear zurueck auf 48 kHz, in Bus 0; 30 s
+  Nachlauf. Einstellungen: FX-Record Zeile 2 (app+0x2230, Typ 0x44, angelegt beim Start / Umschalten).
+- Speicher: Plate-Zustand + 12 Puffer (~210 KB) + Predelay 64 KB beim Bau des Effects-Bildschirms, nur bei > 4,5 MB frei.
+- UI: Linkspfeil auf dem Effects-Bildschirm (ID 0x30) = Seitenwechsel; zweites Tippen auf die gewaehlte RVB-Zelle →
+  FX3 (ID 0x320, Beschriftung, Befehl 0x111, Kacheln und Sends neu), auf FX3 → zurueck; DLY wieder Stock. Send-IDs
+  0xBC → 0x1C8 im FX3-Modus (pstate +5).
+Tests (`tests/test_fx3.py`, `tests/test_padpages.py`): Init / Speichergrenze, Record, Send-Abfrage, Pad-Mischung,
+Effekt (Plate / Hall), Ruhe, Umschalten, Send-ID-Thunks, Linkspfeil.
+Offen: ob FX-Record Zeile 2 im Preset gespeichert wird; Pegel FX3 gegenueber RVB (kein Wet-Regler); Last am Geraet.
+
+## Reverb-Pegel (Build pkV, 2026-10-11)
+
+pkU am Geraet: Hall etwas leise. Send-Effekte geben nur das Nasssignal zurueck (der Trockenanteil bleibt im
+Pad-Ausgang). Messung (Rauschen, Decay 40 / 70 %, stationaerer RMS gegen das Plate): Hall / Chamber −3,2 dB, Room −9 dB.
+pkV: Ausgleich TANK_GAIN 1,45, ROOM_GAIN 2,8 (alle Typen jetzt ±0,2 dB zum Plate, Test); neuer Regler 0x19B "Level:"
+(−12 … +12 dB, 500 = 0 dB, xml `rvblevel`) fuer alle Typen inkl. Plate (nach dem Kern skaliert), bei Plate sichtbar;
+gilt fuer RVB und FX3. Records jetzt 15 Eintraege.

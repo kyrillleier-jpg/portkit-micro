@@ -1,0 +1,138 @@
+"""Unicorn tests for patches/fx3.py (src/fx3.c): memory init and the FX3 record, the pad send checks and the pad mix
+onto bus 0xc (real buffer and mix functions), and the effect in the block driver (bus 0xc -> reverb at 29.8 kHz ->
+bus 0) with the real plate core and the Hall type.
+
+  python3 -I tests/test_fx3.py      (after ./build.sh and patch.py fidelity pages padpages sound reverb fx3 cave)
+"""
+import math
+import os
+import struct
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+_src = open(os.path.join(HERE, "test_fidelity.py")).read()
+exec(compile(_src[:_src.index("\ne = Emu()\n")], "test_fidelity.py (header)", "exec"))   # Emu, check, IMG, SYM, ...
+
+from unicorn.arm_const import UC_ARM_REG_R4, UC_ARM_REG_R9, UC_ARM_REG_S15  # noqa: E402
+
+e = Emu()
+e.stub(0x08042DFC, lambda uc: uc.reg_write(UC_ARM_REG_R0, e.new(uc.reg_read(UC_ARM_REG_R0))))   # DTCM allocator
+APP = 0x24013CB0
+REC = APP + 0x2200 + 2 * 0x18
+F3 = 0x2406D200
+N = 32
+
+# pad records (FX3 Send lives there)
+typ = e.new(4)
+e.mu.mem_write(typ, b"\x45")
+for row in range(4):
+    for col in range(4):
+        e.call(0x08089FC4, APP + 0x1840 + row * 0xF0 + col * 0x30, typ)
+
+def set_pad(pid, v, row=1, col=2):
+    e.call(0x080894FA, APP + 0x1840 + row * 0xF0 + col * 0x30, pid, v)
+
+# --- init: too little heap -> nothing; enough -> plate state, pre-delay, record
+e.stub(0x08042E44, lambda uc: uc.reg_write(UC_ARM_REG_R0, 2 * 1024 * 1024))
+e.call(SYM["fx3_init"])
+check("fx3_init with 2 MB free: no memory taken, FX3 off; the FX3 record is made anyway",
+      e.r32(F3) != 0x46583321 or e.r32(F3 + 4) == 0)
+cnt = struct.unpack("<H", e.mu.mem_read(REC + 0xA, 2))[0]
+ent = e.r32(REC + 4)
+ids = [struct.unpack("<H", e.mu.mem_read(ent + 8 * k, 2))[0] for k in range(cnt)]
+check("FX3 record (FX row 2): a reverb record (Type, Decay, Predelay, Damping, 11 settings)",
+      ids == [0x178, 0x1A, 0x1E, 0x1D] + list(range(0x191, 0x19C)), ids)
+e.stub(0x08042E44, lambda uc: uc.reg_write(UC_ARM_REG_R0, 32 * 1024 * 1024))
+e.call(SYM["fx3_init"])
+plate = e.r32(F3 + 4)
+check("fx3_init with 32 MB free: plate state with its 12 buffers, pre-delay ring",
+      e.r32(F3) == 0x46583321 and plate and all(e.r32(plate + 4 * w) for w in (8, 11, 14, 17, 20, 25, 30, 33, 37, 39, 41, 43))
+      and e.r32(F3 + 8))
+
+# --- engine with real buffers on the buses we use
+engine = e.new(0x16000)
+def bus(i):
+    return engine + 0x150E4 + 20 * i
+for i in (0, 0xC, 0xD, 0xE):
+    e.call(0x080A310C, bus(i), 128)
+def clear_buses():
+    for i in (0, 0xC, 0xD, 0xE):
+        e.call(0x080A31D4, bus(i))
+        e.call(0x080A31C8, bus(i), N)
+def planes(b):
+    return e.r32(b + 8), e.r32(b + 0xC)
+
+# --- the "any send on" check
+pad = e.new(0x700)
+e.w32(pad + 0x18, 1 << 8 | 2)
+f1 = e.new(4)
+def check_a(fx1, fx3):
+    e.wf(f1, [fx1])
+    set_pad(0x1C8, fx3)
+    e.call(SYM["fx3_check_a"], regs=[(UC_ARM_REG_R6, f1), (UC_ARM_REG_R4, pad)])
+    return round(struct.unpack("<f", struct.pack("<I", e.mu.reg_read(UC_ARM_REG_S15)))[0], 4)
+check("send check: FX1 0 + FX3 0 -> 0; FX1 0 + FX3 on -> 1.0; FX1 0.3 -> 0.3",
+      check_a(0.0, 0) == 0.0 and check_a(0.0, 500) == 1.0 and check_a(0.3, 500) == 0.3,
+      (check_a(0.0, 0), check_a(0.0, 500), check_a(0.3, 500)))
+
+# --- the pad's final mix: scratch -> bus 0xc (x FX3 gain) and -> its output
+clear_buses()
+scratch, out = e.new(0x20), e.new(0x20)
+e.call(0x080A310C, scratch, 128)
+e.call(0x080A310C, out, 128)
+e.call(0x080A31C8, scratch, N)
+e.call(0x080A31C8, out, N)
+sl, sr = e.new(4), e.new(4)
+e.call(0x080A32D4, scratch, sl, sr)
+e.wf(e.r32(sl), [0.5] * N)
+e.wf(e.r32(sr), [0.25] * N)
+e.call(0x080A31D4, out)
+e.call(0x080A31C8, out, N)
+set_pad(0x1C8, 500)
+e.call(SYM["fx3_mix_a"], out, scratch, regs=[(UC_ARM_REG_R4, pad), (UC_ARM_REG_R9, engine)])
+e.call(0x080A04C0, s=(0.5,))
+g = struct.unpack("<f", struct.pack("<I", e.mu.reg_read(UC_ARM_REG_S0)))[0]
+bl_, br_ = planes(bus(0xC))
+ol, orr = planes(out)
+check("pad mix: bus 0xc gets scratch x FX3 gain (stock send curve), the output gets the scratch",
+      abs(e.rf(bl_, 1)[0] - 0.5 * g) < 1e-6 and abs(e.rf(br_, 1)[0] - 0.25 * g) < 1e-6 and abs(e.rf(ol, 1)[0] - 0.5) < 1e-6,
+      (e.rf(bl_, 1), g, e.rf(ol, 1)))
+set_pad(0x1C8, 0)
+
+# --- the effect in the block driver
+def run_fx3(blocks, impulse=True, rtype=0):
+    e.call(0x080894FA, REC, 0x178, rtype)
+    L, R = [], []
+    for k in range(blocks):
+        clear_buses()
+        if impulse and k == 0:
+            il, ir = e.new(4), e.new(4)
+            e.call(0x080A32D4, bus(0xC), il, ir)
+            e.wf(e.r32(il), [1.0] + [0.0] * (N - 1))
+            e.wf(e.r32(ir), [1.0] + [0.0] * (N - 1))
+        e.call(SYM["fx3_master"], bus(0), bus(0xE))
+        if e.mu.mem_read(bus(0) + 0x10, 1)[0]:
+            L += [0.0] * N
+            R += [0.0] * N
+        else:
+            pl, pr = planes(bus(0))
+            L += e.rf(pl, N)
+            R += e.rf(pr, N)
+    return L, R
+
+for name, t in (("Plate", 0), ("Hall", 2)):
+    e.w32(F3 + 0x30, 0)                                         # idle counter: active
+    L, R = run_fx3(int(48000 * 1.5) // N, rtype=t)
+    early = sum(v * v for v in L[: 48000 // 4])
+    late = sum(v * v for v in L[48000: 48000 * 3 // 2])
+    print(f"     FX3 {name}: energy first 250 ms {early:.4f}, 1.0-1.5 s {late:.6f}, peak {max(abs(v) for v in L + R):.3f}")
+    check(f"FX3 {name}: impulse on bus 0xc -> reverb on bus 0 (48 kHz), finite, decaying, stereo",
+          all(math.isfinite(v) for v in L + R) and early > 0 and 0 < late < early and L != R)
+
+# idle: silent bus and the run-on used up -> bus 0 untouched
+e.w32(F3 + 0x30, 10 ** 6)
+L, R = run_fx3(4, impulse=False)
+check("FX3 idle after its run-on: bus 0 left alone (stays silent)", all(v == 0.0 for v in L + R))
+
+print(f"\n{'FAILED: ' + str(failures) if failures else 'all passed'}")
+sys.exit(1 if failures else 0)

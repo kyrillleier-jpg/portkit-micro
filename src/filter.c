@@ -55,6 +55,7 @@ typedef void (*register_fn)(void *table, int param, const char *label, const cha
 #define P_DRIVE    0x1c2         /* Drive: 0 .. 1000 */
 #define P_SHIFT    0x1c3         /* Shift (clips, src/clipshift.c): -100 .. 100 ms */
 #define P_PLAYLEN  0x1c4         /* Play length (clips, src/clipshift.c): list, 0 = Full */
+#define P_FX3SEND  0x1c8         /* FX3 Send (src/fx3.c): 0 .. 1000, like FX1 / FX2 Send */
 #define P_SMODE    0x1c7         /* Stretch Mode (clips, src/stretch.c): Auto / Jump / Smooth */
 #define P_STRETCH  0x1c6         /* Stretch (clips, src/clipshift.c): -100 .. 100 % */
 extern const char *const playlen_names[129];
@@ -121,6 +122,7 @@ void interp_register(void *table, int param, const char *label, const char *cons
     fw_register_list(table, P_PLAYLEN, "Play Len:", playlen_names, 129, "pkplaylen");
     fw_register_knob(table, P_STRETCH, 1, "Stretch %:", -100, 100, "pkstretch");
     fw_register_list(table, P_SMODE, "Str Mode:", smode_names, 3, "pkstretchmode");
+    fw_register_knob(table, P_FX3SEND, 8, "FX3 Send:", 0, 1000, "fx3send");
 }
 
 /* Pad record init (0x08089548): its two pad blocks add Filter (0xaa) through 0x0808951e (0x080896f8, 0x08089922);
@@ -139,7 +141,8 @@ void pad_store_add(void *store, unsigned param, int value)
     fw_store_add(store, P_SHIFT, 0);
     fw_store_add(store, P_PLAYLEN, 0);
     fw_store_add(store, P_STRETCH, 0);
-    fw_store_add(store, P_SMODE, 0);     /* 65 in the full pad record (58 stock + 7); capacity raised to 72 (sound.py) */
+    fw_store_add(store, P_SMODE, 0);
+    fw_store_add(store, P_FX3SEND, 0);   /* 66 in the full pad record (58 stock + 8); capacity raised to 72 (sound.py) */
 }
 
 struct fstate {                  /* at filter object +4..+0x44; the stock coefficient sets and states used to live here */

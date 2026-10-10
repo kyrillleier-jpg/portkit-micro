@@ -1,10 +1,10 @@
-"""Unicorn tests for patches/fidelity.py and patches/pages.py on the patched image (out/fidelity+pages+padpages+sound+reverb+cave/MICRO.BIN).
+"""Unicorn tests for patches/fidelity.py and patches/pages.py on the patched image (out/fidelity+pages+padpages+sound+reverb+fx3+cave/MICRO.BIN).
 
 Real firmware code runs for: the Interp registration call, the app pad store (init 0x08089fc4, get/set), the stock
 cutoff / resonance curves, the parameter evaluator, the audio-buffer accessors, the two resampling kernels and the
 voice-start filter reset. Only the allocator (0x08042dc0) is replaced, by a bump allocator.
 
-  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity pages padpages sound reverb cave)
+  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity pages padpages sound reverb fx3 cave)
 """
 import math
 import os
@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "patches"))
 from thumb import BASE, bl_target, symbols  # noqa: E402
 
-IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+reverb+cave", "MICRO.BIN"), "rb").read()
+IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+reverb+fx3+cave", "MICRO.BIN"), "rb").read()
 SYM = symbols(os.path.join(ROOT, "out", "cave.elf"))
 
 APP_PADS = 0x24013CB0 + 0x1840
@@ -166,7 +166,8 @@ check("label 'Fidelity:', xml name stays 'interpqual'",
 check("new knobs registered: Filter 2 (bipolar), Res 2, Drive",
       knobs == [(0x1C0, 9, "Filter 2:", -1000, 1000, "pkfilt2"), (0x1C1, 8, "Res 2:", 0, 1000, "pkres2"),
                 (0x1C2, 8, "Drive:", 0, 1000, "pkdrive"), (0x1C3, 1, "Shift ms:", -100, 100, "pkshift"),
-                (0x1C6, 1, "Stretch %:", -100, 100, "pkstretch")], knobs)
+                (0x1C6, 1, "Stretch %:", -100, 100, "pkstretch"),
+                (0x1C8, 8, "FX3 Send:", 0, 1000, "fx3send")], knobs)
 pl = lists.get(0x1C4)
 pl_names = [e.cstr(e.r32(pl[1] + 4 * k)) for k in range(pl[2])] if pl else []
 check("Play Len list: Full, 1/4 .. 32 bars in quarter bars, xml pkplaylen",
@@ -461,7 +462,7 @@ set_param(0x1C3, 0)
 clip_loop = [struct.unpack_from("<8H", IMG, t + 2 * 0x5A - 0x08040000) for t in (0x080C6A1C, 0x080C6C38)]
 check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len, Stretch, Stretch Mode",
       all(m == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C6, 0x1C7) for m in clip_loop), clip_loop)
-check("full pad record (type 3): 65 entries, capacity raised to 72", cnt3 == 65 and cap3 == 72 and ids3.get(0x1C7) == 0,
+check("full pad record (type 3): 66 entries, capacity raised to 72", cnt3 == 66 and cap3 == 72 and ids3.get(0x1C8) == 0,
       (cnt3, cap3))
 
 
@@ -646,11 +647,11 @@ check("segment start, Stretch -100 %: segment 3 at 36000 (half speed); +50 %: 10
 from capstone import CS_ARCH_ARM, CS_MODE_MCLASS, CS_MODE_THUMB, Cs  # noqa: E402
 _md = Cs(CS_ARCH_ARM, CS_MODE_THUMB | CS_MODE_MCLASS)
 _md.skipdata = True
-_ours = {f"#{v:#x}" for v in (0x1C0, 0x1C1, 0x1C2, 0x1C3, 0x1C4, 0x1C6, 0x1C7, *range(0x191, 0x19B))}
+_ours = {f"#{v:#x}" for v in (0x1C0, 0x1C1, 0x1C2, 0x1C3, 0x1C4, 0x1C6, 0x1C7, 0x1C8, *range(0x191, 0x19C))}
 _uses = [hex(i.address) for i in _md.disasm(IMG[:0x080BC000 - 0x08040000], 0x08040000)   # code, not the data after it
          if i.mnemonic in ("movs", "movw", "mov.w", "cmp", "cmp.w") and "sp" not in i.op_str
          and any(i.op_str.endswith(v) for v in _ours)]
-check("new parameter ids 0x1c0-0x1c4, 0x1c6, 0x1c7, 0x191-0x19a: no immediate use in the stock code", not _uses, _uses)
+check("new parameter ids 0x1c0-0x1c4, 0x1c6, 0x1c7, 0x1c8, 0x191-0x19b: no immediate use in the stock code", not _uses, _uses)
 
 # --- smooth time stretch (WSOLA, clip_render in place of 0x080b55ac), real stream reads on an in-memory mono stream
 SR = 48000
