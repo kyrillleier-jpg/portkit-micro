@@ -14,7 +14,7 @@ import sys
 from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_MODE_THUMB, Uc
 from unicorn.arm_const import UC_ARM_REG_C1_C0_2, UC_ARM_REG_FPEXC, UC_CPU_ARM_MAX
 from unicorn.arm_const import (UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2,
-                               UC_ARM_REG_R3, UC_ARM_REG_R4, UC_ARM_REG_R5, UC_ARM_REG_R6, UC_ARM_REG_S0, UC_ARM_REG_S1,
+                               UC_ARM_REG_R3, UC_ARM_REG_R4, UC_ARM_REG_R5, UC_ARM_REG_R6, UC_ARM_REG_S0, UC_ARM_REG_S1, UC_ARM_REG_S15, UC_ARM_REG_SL,
                                UC_ARM_REG_SP)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -164,7 +164,8 @@ check("label 'Fidelity:', xml name stays 'interpqual'",
       e.cstr(seen["label"]) == "Fidelity:" and e.cstr(seen["xml"]) == "interpqual", (e.cstr(seen["label"]), e.cstr(seen["xml"])))
 check("new knobs registered: Filter 2 (bipolar), Res 2, Drive",
       knobs == [(0x1C0, 9, "Filter 2:", -1000, 1000, "pkfilt2"), (0x1C1, 8, "Res 2:", 0, 1000, "pkres2"),
-                (0x1C2, 8, "Drive:", 0, 1000, "pkdrive"), (0x1C3, 1, "Shift ms:", -100, 100, "pkshift")], knobs)
+                (0x1C2, 8, "Drive:", 0, 1000, "pkdrive"), (0x1C3, 1, "Shift ms:", -100, 100, "pkshift"),
+                (0x1C5, 1, "Stretch %:", -100, 100, "pkstretch")], knobs)
 pl = lists.get(0x1C4)
 pl_names = [e.cstr(e.r32(pl[1] + 4 * k)) for k in range(pl[2])] if pl else []
 check("Play Len list: Full, 1/4 .. 32 bars in quarter bars, xml pkplaylen",
@@ -208,7 +209,7 @@ e.call(0x08089FC4, rec3, typ3)
 ids3, cnt3, cap3 = store_ids(rec3)
 check("pad records (type 0x45 and 3): Filter 2 = 0, Res 2 = 500, Drive = 0, within capacity",
       all(d.get(0x1C0) == 0 and d.get(0x1C1) == 500 and d.get(0x1C2) == 0 and d.get(0x1C3) == 0 and d.get(0x1C4) == 0
-          for d in (ids45, ids3))
+          and d.get(0x1C5) == 0 for d in (ids45, ids3))
       and cnt3 <= cap3 and cnt45 <= cap45 and 0xAA in ids3, (cnt45, cap45, cnt3, cap3))
 
 
@@ -453,9 +454,40 @@ e.call(SYM["clip_seek_thunk"], stream, 100, regs=[(UC_ARM_REG_R4, cpad)])
 del e.stubs[0x080A4624]
 check("Shift: segment prefetch seek follows (wrapped)", seeks == [472, 580], seeks)
 set_param(0x1C3, 0)
-clip_loop = [struct.unpack_from("<6H", IMG, t + 2 * 0x5A - 0x08040000) for t in (0x080C6A1C, 0x080C6C38)]
-check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len",
-      all(m == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4) for m in clip_loop), clip_loop)
+clip_loop = [struct.unpack_from("<8H", IMG, t + 2 * 0x5A - 0x08040000) for t in (0x080C6A1C, 0x080C6C38)]
+check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len, Stretch",
+      all(m == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C5, 0) for m in clip_loop), clip_loop)
+check("full pad record (type 3): exactly at capacity (64)", cnt3 == cap3 == 64, (cnt3, cap3))
+
+
+def beats(p_, beatcount, auto=None, sliced=0):
+    pad_ = engine_pad()
+    e.w32(pad_ + 0xB80, beatcount)
+    e.mu.mem_write(pad_ + 0x254, bytes([sliced]))
+    set_param(0x1C5, p_)
+    if auto is None:
+        e.call(SYM["clip_beatcount_thunk"], 0x11, 0x22, 0x33, 0x44, regs=[(UC_ARM_REG_SL, pad_)])
+        r = [e.mu.reg_read(x) for x in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
+        out = r[3]
+        kept = r[:3] == [0x11, 0x22, 0x33]
+    else:
+        e.call(SYM["clip_autobeats_thunk"], 0x11, 0x22, auto, 0x44, regs=[(UC_ARM_REG_SL, pad_)])
+        r = [e.mu.reg_read(x) for x in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
+        s15 = e.mu.reg_read(UC_ARM_REG_S15)
+        out = r[2]
+        kept = r[0] == 0x11 and r[1] == 0x22 and r[3] == 0x44 and s15 == r[2]
+    set_param(0x1C5, 0)
+    return out, kept
+
+
+check("Stretch 0: Beat Count unchanged, other registers kept", beats(0, 16) == (16, True))
+check("Stretch +100 %: double speed = half the beats (16 -> 8); -100 %: 32", beats(100, 16)[0] == 8 and
+      beats(-100, 16)[0] == 32)
+check("Stretch +50 %: 16 / 1.5 = 10.67 -> 11 beats (quantized); -50 %: 24", beats(50, 16)[0] == 11 and
+      beats(-50, 16)[0] == 24)
+check("Stretch on Beat Count Auto (0): stays Auto", beats(100, 0)[0] == 0)
+check("Stretch on the Auto estimate (8 beats, +100 %): 4, s15 = r2, registers kept", beats(100, 0, auto=8) == (4, True))
+check("Stretch: never below 1 beat; sliced pad unchanged", beats(100, 1)[0] == 1 and beats(100, 16, sliced=1)[0] == 16)
 
 
 def segments(q, count, extra, unit, synced=1, sliced=0):

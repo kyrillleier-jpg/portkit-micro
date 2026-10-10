@@ -17,6 +17,13 @@
  * 3840, 1/2 1920, 1/4 960, 1/8 480, 1/16 240; "Slice" 0xf0000 is the slicer). The count is capped at the play length:
  * quarter bars * 960 / unit, rounded, at least 1, so the length is exact down to the Sync unit (a quarter bar is one
  * beat, 4/4). Sync None or Slice: no cap.
+ *
+ * Stretch for clip pads: -100 .. +100 %, speed x 1 / (1 + |p| / 100) below 0 and x (1 + p / 100) above (so -100 %
+ * is half, +100 % double speed). The clip's tempo comes from its beat count: the clip setup 0x080b40fc turns Beat
+ * Count (pad +0xb80, set from 0xb4; 0 = Auto) or, on Auto, its power-of-two estimate (r2 at 0x080b4258) into the
+ * clip's length in ticks (beats x 960). Both become round(beats / speed), at least 1: the stretch is quantized to whole
+ * beats, as with Beat Count itself. The setup runs at every trigger and loop start (0x080b5f5a), so a change applies
+ * from the next loop.
  */
 #include <stdint.h>
 
@@ -34,6 +41,8 @@ typedef int (*frames_fn)(void *stream);
 #define P_SHIFT        0x1c3
 #define P_PLAYLEN      0x1c4      /* list index: 0 = Full, q = q quarter bars (1 .. 128) */
 #define PAD_SEGMENTS   0x240      /* + 0x244: segment count */
+#define P_STRETCH      0x1c5      /* -100 .. 100 % */
+#define PAD_BEATCOUNT  0xb80
 #define PAD_SYNCED     0x1f5
 #define PAD_UNIT_TICKS 0x220      /* int64 */
 #define TICKS_PER_BEAT 960
@@ -159,4 +168,31 @@ int clip_segments(const uint8_t *pad)
     if (limit < 1)
         limit = 1;
     return limit < count ? limit : count;
+}
+
+/* --- stretch -------------------------------------------------------------------------------------------------------- */
+static int stretched(const uint8_t *pad, int beats)
+{
+    if (beats < 1 || pad[PAD_SLICED])
+        return beats;
+    int p = (int)pad_setting(pad, P_STRETCH);
+    if (p == 0 || p < -100 || p > 100)
+        return beats;
+    /* beats / speed: speed = (100 + p) / 100 above 0, 100 / (100 - p) below */
+    int num = p > 0 ? beats * 100 : beats * (100 - p);
+    int den = p > 0 ? 100 + p : 100;
+    int b = (num + den / 2) / den;
+    return b < 1 ? 1 : b > 512 ? 512 : b;
+}
+
+/* thunks: 0x080b42ac `ldr.w r3, [sl, #0xb80]` and 0x080b4258 `vmov s15, r2` (Auto estimate), pad in sl */
+int clip_beatcount(const uint8_t *pad)
+{
+    int beats = *(const int32_t *)(pad + PAD_BEATCOUNT);
+    return beats ? stretched(pad, beats) : 0;
+}
+
+int clip_autobeats(const uint8_t *pad, int beats)
+{
+    return stretched(pad, beats);
 }

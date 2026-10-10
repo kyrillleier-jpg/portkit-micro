@@ -5,6 +5,9 @@
  * 0x080a4624 (stream, pos)                   at 0x080b47d2, 0x080b4b4c -> clip_seek(stream, pos, pad)
  * Play length: `ldrd r1, r2, [r6, #0x240]` (0x080b5f2e, 0x080b611a; pad in r6, `add r2, r1; cmp` follow) ->
  *   r1 = pad[0x240], r2 = clip_segments(pad) - r1, everything else kept (flags are set by the cmp after).
+ * Stretch (clip setup 0x080b40fc, pad in sl; flags are set again right after both):
+ *   0x080b42ac `ldr.w r3, [sl, #0xb80]` -> r3 = clip_beatcount(pad)
+ *   0x080b4258 `vmov s15, r2` (Auto: power-of-two beats) -> r2 = clip_autobeats(pad, r2); s15 = r2
  */
     .syntax unified
     .thumb
@@ -45,4 +48,36 @@ clip_segments_thunk:
     ldr     r1, [r6, #0x240]
     sub     r2, r0, r1
     pop     {r0, r3, ip, lr}
+    bx      lr
+
+    .global clip_beatcount_thunk
+    .thumb_func
+    .type clip_beatcount_thunk, %function
+clip_beatcount_thunk:
+    push    {r0, r1, r2, ip, lr}
+    sub     sp, sp, #4
+    vpush   {s0-s15}
+    mov     r0, sl
+    bl      clip_beatcount
+    mov     r3, r0
+    vpop    {s0-s15}
+    add     sp, sp, #4
+    pop     {r0, r1, r2, ip, lr}
+    bx      lr
+
+    .global clip_autobeats_thunk
+    .thumb_func
+    .type clip_autobeats_thunk, %function
+clip_autobeats_thunk:
+    push    {r0, r1, r3, ip, lr}
+    sub     sp, sp, #4
+    vpush   {s0-s15}
+    mov     r0, sl
+    mov     r1, r2
+    bl      clip_autobeats
+    mov     r2, r0
+    vpop    {s0-s15}
+    add     sp, sp, #4
+    pop     {r0, r1, r3, ip, lr}
+    vmov    s15, r2
     bx      lr

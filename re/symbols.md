@@ -439,3 +439,21 @@ Default 0 = Full) auf der Loop-Seite der Clip-Tabellen nach Shift. Thunk `clip_s
 = min(Anzahl, round(Viertel-Takte × 960 / Pad+0x220)), mindestens 1; nur mit Sync (Pad+0x1F5) und nicht Slice / Slicer.
 Genauigkeit = Sync-Einheit (bei Sync 1 bar nur ganze Takte). Pad-Record jetzt 63 von 64 Eintraegen.
 Tests: Liste, Defaults, Segmentgrenze bei Sync 1/4, 1/16, 1 bar, Rundung, laenger als Clip, Ausnahmen.
+
+## Stretch fuer Clips (Build pkI, 2026-10-10)
+
+Wunsch: Timestretch-Regler in %, ±100 %, gern ueber den Beat Count (quantisiert).
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| Pad+0xB80 | Beat Count (0xB4: Auto = 0, 1..512) | einziger Leser 0x080B42AC im Clip-Setup 0x080B40FC: ≠ 0 → Clip-Ticks = Beats × 960 (0x080B44A2) | vermutet |
+| 0x080B424E..0x080B4258 | Auto: Beats = groesste Zweierpotenz ≤ geschaetzte Beats (r2), dann × 960 | vermutet |
+| 0x080B40FC | Clip-Setup | Aufrufer u. a. Loop-Neustart 0x080B5F5A, Param-Aenderungen (0x080B6FF6, 0x080B73F4), Trigger | vermutet |
+
+Umsetzung: Parameter 0x1C5 "Stretch %:" (Typ 1, −100..100, xml `pkstretch`, Default 0) auf der Loop-Seite der Clip-Tabellen
+nach Play Len. Thunks an 0x080B42AC (`ldr.w r3, [sl, #0xb80]`) und 0x080B4258 (`vmov s15, r2`): Beats → round(Beats /
+Speed), Speed = 1 + p/100 (p > 0) bzw. 1 / (1 − p/100) (p < 0), also +100 % doppelt, −100 % halb so schnell; 1..512 Beats,
+Auto bleibt Auto (nur die Schaetzung wird skaliert), Slicer unveraendert. Quantisiert auf ganze Beats wie Beat Count.
+Wirkt ab dem naechsten Setup (Trigger / Loop-Neustart); die Tempo-Anzeige der UI (aus Beat Count) zeigt den Stretch nicht.
+Pad-Record jetzt 64 von 64 Eintraegen (voll).
+Tests: Registrierung, Record, Loop-Seite, beide Thunks (0, ±100 %, ±50 %, Auto, Grenzen, Register erhalten).

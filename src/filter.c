@@ -55,6 +55,7 @@ typedef void (*register_fn)(void *table, int param, const char *label, const cha
 #define P_DRIVE    0x1c2         /* Drive: 0 .. 1000 */
 #define P_SHIFT    0x1c3         /* Shift (clips, src/clipshift.c): -100 .. 100 ms */
 #define P_PLAYLEN  0x1c4         /* Play length (clips, src/clipshift.c): list, 0 = Full */
+#define P_STRETCH  0x1c5         /* Stretch (clips, src/clipshift.c): -100 .. 100 % */
 extern const char *const playlen_names[129];
 
 static const float crunch_rate[] = {16000.0f, 12000.0f, 10000.0f, 8000.0f, 6000.0f, 4000.0f, 2000.0f};
@@ -116,6 +117,7 @@ void interp_register(void *table, int param, const char *label, const char *cons
     fw_register_knob(table, P_DRIVE, 8, "Drive:", 0, 1000, "pkdrive");
     fw_register_knob(table, P_SHIFT, 1, "Shift ms:", -100, 100, "pkshift");   /* type 1: integer, like Transpose */
     fw_register_list(table, P_PLAYLEN, "Play Len:", playlen_names, 129, "pkplaylen");
+    fw_register_knob(table, P_STRETCH, 1, "Stretch %:", -100, 100, "pkstretch");
 }
 
 /* Pad record init (0x08089548): its two pad blocks add Filter (0xaa) through 0x0808951e (0x080896f8, 0x08089922);
@@ -132,7 +134,8 @@ void pad_store_add(void *store, unsigned param, int value)
     fw_store_add(store, P_RES2, 500);
     fw_store_add(store, P_DRIVE, 0);
     fw_store_add(store, P_SHIFT, 0);
-    fw_store_add(store, P_PLAYLEN, 0);   /* 63 of 64 entries in the full pad record */
+    fw_store_add(store, P_PLAYLEN, 0);
+    fw_store_add(store, P_STRETCH, 0);   /* 64 of 64 entries in the full pad record: no room for more */
 }
 
 struct fstate {                  /* at filter object +4..+0x44; the stock coefficient sets and states used to live here */
