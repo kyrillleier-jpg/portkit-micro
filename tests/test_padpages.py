@@ -1,10 +1,10 @@
-"""Unicorn tests for patches/padpages.py on the patched image (out/fidelity+pages+padpages+cave/MICRO.BIN).
+"""Unicorn tests for patches/padpages.py on the patched image (out/fidelity+pages+padpages+sound+cave/MICRO.BIN).
 
 Runs: the row thunks on their own (result, flags and registers preserved), the stock function bodies with the thunks in
 place (which tile they address on page 0 / 1), the page-aware guards, the constructor wrappers (stock constructors
 stubbed), and the page switch / encoder logic of the Pads screen with recorded calls. Drawing is not emulated.
 
-  python3 -I tests/test_padpages.py      (after ./build.sh and patch.py fidelity pages padpages cave)
+  python3 -I tests/test_padpages.py      (after ./build.sh and patch.py fidelity pages padpages sound cave)
 """
 import os
 import struct
@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "patches"))
 from thumb import BASE, bl_target, symbols  # noqa: E402
 
-IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+cave", "MICRO.BIN"), "rb").read()
+IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+cave", "MICRO.BIN"), "rb").read()
 SYM = symbols(os.path.join(ROOT, "out", "cave.elf"))
 RET, STACK = 0x24000000, 0x2407F000
 PSTATE = 0x2406C110

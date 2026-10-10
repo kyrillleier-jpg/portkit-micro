@@ -1,10 +1,10 @@
-"""Unicorn tests for patches/fidelity.py and patches/pages.py on the patched image (out/fidelity+pages+padpages+cave/MICRO.BIN).
+"""Unicorn tests for patches/fidelity.py and patches/pages.py on the patched image (out/fidelity+pages+padpages+sound+cave/MICRO.BIN).
 
 Real firmware code runs for: the Interp registration call, the app pad store (init 0x08089fc4, get/set), the stock
 cutoff / resonance curves, the parameter evaluator, the audio-buffer accessors, the two resampling kernels and the
 voice-start filter reset. Only the allocator (0x08042dc0) is replaced, by a bump allocator.
 
-  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity pages padpages cave)
+  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity pages padpages sound cave)
 """
 import math
 import os
@@ -14,14 +14,14 @@ import sys
 from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_MODE_THUMB, Uc
 from unicorn.arm_const import UC_ARM_REG_C1_C0_2, UC_ARM_REG_FPEXC, UC_CPU_ARM_MAX
 from unicorn.arm_const import (UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2,
-                               UC_ARM_REG_R3, UC_ARM_REG_R5, UC_ARM_REG_R6, UC_ARM_REG_S0, UC_ARM_REG_S1,
+                               UC_ARM_REG_R3, UC_ARM_REG_R4, UC_ARM_REG_R5, UC_ARM_REG_R6, UC_ARM_REG_S0, UC_ARM_REG_S1,
                                UC_ARM_REG_SP)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "patches"))
 from thumb import BASE, symbols  # noqa: E402
 
-IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+cave", "MICRO.BIN"), "rb").read()
+IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+cave", "MICRO.BIN"), "rb").read()
 SYM = symbols(os.path.join(ROOT, "out", "cave.elf"))
 
 APP_PADS = 0x24013CB0 + 0x1840
@@ -53,7 +53,8 @@ class Emu:
         mu.mem_map(0x24000000, 0x80000)          # AXI SRAM
         mu.reg_write(UC_ARM_REG_C1_C0_2, 0xF << 20)   # FPU on
         mu.reg_write(UC_ARM_REG_FPEXC, 0x40000000)
-        self.heap = 0x24030000                   # scratch for test objects (inside the stock heap range)
+        mu.mem_map(0x30000000, 0x200000)
+        self.heap = 0x30000000                   # scratch for test objects (D2 SRAM; clear of PARK / pad state)
         self.alloc_at = 0x24040000               # bump allocator for the firmware's own allocations
         self.stubs, self.hooked = {}, set()
         mu.hook_add(UC_HOOK_CODE, lambda uc, a, size, _: uc.emu_stop(), begin=RET, end=RET)
@@ -81,6 +82,7 @@ class Emu:
     def new(self, size):
         p = self.heap
         self.heap += (size + 15) & ~15
+        assert self.heap <= 0x30200000, "test heap exhausted"
         self.mu.mem_write(p, bytes(size))
         return p
 
@@ -89,6 +91,9 @@ class Emu:
 
     def r32(self, a):
         return struct.unpack("<I", self.mu.mem_read(a, 4))[0]
+
+    def r16(self, a):
+        return struct.unpack("<H", self.mu.mem_read(a, 2))[0]
 
     def wf(self, a, vals):
         self.mu.mem_write(a, struct.pack(f"<{len(vals)}f", *vals))
@@ -128,7 +133,18 @@ def fake_register(uc):
                 count=e.r32(sp), xml=e.r32(sp + 4))
 
 
+knobs = []
+
+
+def fake_knob(uc):
+    sp = uc.reg_read(UC_ARM_REG_SP)
+    to_i = lambda v: v - (1 << 32) if v >> 31 else v
+    knobs.append((uc.reg_read(UC_ARM_REG_R1), uc.reg_read(UC_ARM_REG_R2), e.cstr(uc.reg_read(UC_ARM_REG_R3)),
+                  to_i(e.r32(sp)), to_i(e.r32(sp + 4)), e.cstr(e.r32(sp + 8))))
+
+
 e.stub(0x08069E7C, fake_register)
+e.stub(0x08069ED4, fake_knob)
 # run the stock instructions around the call site: r4 = table, 0x0806b33a .. 0x0806b34e
 e.mu.reg_write(UC_ARM_REG_R0, 0)
 e.mu.reg_write(UC_ARM_REG_SP, STACK - 0x40)
@@ -139,7 +155,11 @@ names = [e.cstr(e.r32(seen["names"] + 4 * k)) for k in range(seen.get("count", 0
 check("Fidelity list: Normal, HighQ, 5 machines, 16k .. 2k", names == NAMES and seen["param"] == P_INTERP, names)
 check("label 'Fidelity:', xml name stays 'interpqual'",
       e.cstr(seen["label"]) == "Fidelity:" and e.cstr(seen["xml"]) == "interpqual", (e.cstr(seen["label"]), e.cstr(seen["xml"])))
+check("new knobs registered: Filter 2 (bipolar), Res 2, Drive",
+      knobs == [(0x1C0, 9, "Filter 2:", -1000, 1000, "pkfilt2"), (0x1C1, 8, "Res 2:", 0, 1000, "pkres2"),
+                (0x1C2, 8, "Drive:", 0, 1000, "pkdrive"), (0x1C3, 1, "Shift ms:", -100, 100, "pkshift")], knobs)
 del e.stubs[0x08069E7C]
+del e.stubs[0x08069ED4]
 
 # --- app pad records (real store init, type 0x45 = grid pads at boot) and engine pads
 typ = e.new(4)
@@ -157,6 +177,26 @@ for row in range(4):
 
 def set_interp(v, row=1, col=2):
     e.call(0x080894FA, record(row, col), P_INTERP, v)
+
+
+def set_param(pid, v, row=1, col=2):
+    e.call(0x080894FA, record(row, col), pid, v)
+
+
+def store_ids(rec):
+    cnt, cap, ent = e.r16(rec + 0xA), e.r16(rec + 0xC), e.r32(rec + 4)
+    return {e.r16(ent + 8 * k): e.r32(ent + 8 * k + 4) for k in range(cnt)}, cnt, cap
+
+
+ids45, cnt45, cap45 = store_ids(record(1, 2))
+rec3 = e.new(0x30)
+typ3 = e.new(4)
+e.mu.mem_write(typ3, b"\x03")
+e.call(0x08089FC4, rec3, typ3)
+ids3, cnt3, cap3 = store_ids(rec3)
+check("pad records (type 0x45 and 3): Filter 2 = 0, Res 2 = 500, Drive = 0, within capacity",
+      all(d.get(0x1C0) == 0 and d.get(0x1C1) == 500 and d.get(0x1C2) == 0 and d.get(0x1C3) == 0 for d in (ids45, ids3))
+      and cnt3 <= cap3 and cnt45 <= cap45 and 0xAA in ids3, (cnt45, cap45, cnt3, cap3))
 
 
 def engine_pad(row=1, col=2):
@@ -270,6 +310,139 @@ lp_hi, lp_lo = rms_after(12000, -0.6), rms_after(200, -0.6)
 check("Filter left (LP): 12 kHz far below 200 Hz", lp_hi < 0.05 * lp_lo, (lp_hi, lp_lo))
 hp_hi, hp_lo = rms_after(12000, 0.6), rms_after(200, 0.6)
 check("Filter right (HP): 200 Hz far below 12 kHz", hp_lo < 0.05 * hp_hi, (hp_lo, hp_hi))
+
+# --- Filter 2, Drive (new pad parameters, read from the app record)
+def rms_f2(f, knob2, res2=500, knob=0.0, blocks=8):
+    set_param(0x1C0, knob2)
+    set_param(0x1C1, res2)
+    obj = filter_obj(knob)
+    for k in range(blocks):
+        y = sine(f, ph=k * N)
+        b, L, R = buffer(y, y)
+        run_a(obj, b, pad)
+        acc = e.rf(L, N)
+    set_param(0x1C0, 0)
+    set_param(0x1C1, 500)
+    return math.sqrt(sum(v * v for v in acc) / N)
+
+
+lo2, hi2 = rms_f2(200, -600), rms_f2(12000, -600)
+check("Filter 2 alone, left (LP): 12 kHz far below 200 Hz", hi2 < 0.05 * lo2, (hi2, lo2))
+lo2, hi2 = rms_f2(200, 600), rms_f2(12000, 600)
+check("Filter 2 alone, right (HP): 200 Hz far below 12 kHz", lo2 < 0.05 * hi2, (lo2, hi2))
+mid1 = rms_after(12000, -0.4, blocks=16)
+mid12 = rms_f2(12000, -400, knob=-0.4, blocks=16)
+check("Filter + Filter 2 in series: more attenuation than Filter alone", mid12 < 0.5 * mid1, (mid12, mid1))
+check("Filter 2 HP + Filter LP = band: 200 Hz and 12 kHz both down",
+      rms_f2(200, 500, knob=-0.5) < 0.1 * 0.8 / math.sqrt(2) and rms_f2(12000, 500, knob=-0.5) < 0.1 * 0.8 / math.sqrt(2))
+
+
+def run_drive(d, amp, blocks=4):
+    set_param(0x1C2, d)
+    obj = filter_obj(0.0)
+    for k in range(blocks):
+        y = sine(997, a=amp, ph=k * N)
+        b, L, R = buffer(y, y)
+        run_a(obj, b, pad)
+        out = e.rf(L, N)
+    set_param(0x1C2, 0)
+    return y, out
+
+
+y, out = run_drive(0, 0.8)
+check("Drive 0, filters off: buffer untouched", all(abs(p - q) < 1e-7 for p, q in zip(out, y)))
+y, out = run_drive(1000, 0.8)
+check("Drive full: bounded (|y| <= 1), finite", all(math.isfinite(v) and abs(v) <= 1.0001 for v in out), max(out))
+
+
+def harm3(sig, f=997):
+    c = sum(v * math.cos(2 * math.pi * 3 * f * i / 48000) for i, v in enumerate(sig))
+    s_ = sum(v * math.sin(2 * math.pi * 3 * f * i / 48000) for i, v in enumerate(sig))
+    c1 = sum(v * math.cos(2 * math.pi * f * i / 48000) for i, v in enumerate(sig))
+    s1 = sum(v * math.sin(2 * math.pi * f * i / 48000) for i, v in enumerate(sig))
+    return math.hypot(c, s_) / math.hypot(c1, s1)
+
+
+h_lo, h_hi = harm3(run_drive(200, 0.5)[1]), harm3(run_drive(1000, 0.5)[1])
+check("Drive adds odd harmonics, more at full than at 20 %", h_hi > 0.1 and h_hi > 2 * h_lo, (h_lo, h_hi))
+_, q1 = run_drive(1000, 0.05)
+check("Drive full: quiet input comes up (makeup)", max(q1) > 0.3, max(q1))
+
+set_param(0x1C1, 1000)
+obj = filter_obj(-0.4, res=1.0)
+outs = []
+for amp in (0.1, 0.8):
+    obj = filter_obj(-0.4, res=1.0)
+    for k in range(8):
+        y = sine(300, a=amp, ph=k * N)
+        b, L, R = buffer(y, y)
+        run_a(obj, b, pad)
+    outs.append(e.rf(L, N))
+set_param(0x1C1, 500)
+check("Res full without Drive is linear (no saturation on Res any more)",
+      all(abs(8 * p - q) < 1e-3 for p, q in zip(outs[0], outs[1])))
+
+# voice-start reset clears Filter 2's running flag too
+set_param(0x1C0, -500)
+obj = filter_obj(0.0)
+for k in range(2):
+    b, L, R = buffer(sine(300, ph=k * N), sine(300, ph=k * N))
+    run_a(obj, b, pad)
+on2 = e.r32(obj + 0x4C)
+e.call(0x080B8794, obj)
+check("Filter 2 state: running flag (+0x4c) set, cleared by the stock voice-start reset", on2 == 1 and e.r32(obj + 0x4C) == 0)
+set_param(0x1C0, 0)
+
+# --- main page of every pad mode: Level, Pitch, Filter, Res, Pan, Filter 2, Res 2, Drive
+mains = [struct.unpack_from("<9H", IMG, t - 0x08040000) for t in
+         (0x080C6A1C, 0x080C6C38, 0x080C6EEC, 0x080C7108, 0x080C76C0, 0x080C78DC, 0x080C7AF8, 0x080C7E28, 0x080C8044)]
+check("main pages: + Filter 2, Res 2, Drive after Pan",
+      all(m == (0x04, 0x3F, 0xAA, 0x11, 0x45, 0x1C0, 0x1C1, 0x1C2, 0) for m in mains))
+
+# --- clip shift: the clip reader's stream calls, real 0x080a4500 on an in-memory stream (1000 frames, value = index)
+stream = e.new(0x40)
+plane = e.new(4 * 1000)
+e.wf(plane, [float(i) for i in range(1000)])
+e.w32(stream + 4, plane)
+e.w32(stream + 8, plane)
+e.w32(stream + 0x10, 1000)
+cpad = engine_pad()
+
+
+def clip_read(pos, n=64, pad_=None):
+    dst = e.new(4 * n)
+    e.call(SYM["clip_read1_thunk"], stream, dst, n, pos, stack=(0,), regs=[(UC_ARM_REG_R4, cpad if pad_ is None else pad_)])
+    return [int(v) for v in e.rf(dst, n)]
+
+
+def stock_read(pos, n=64):
+    dst = e.new(4 * n)
+    e.call(0x080A4500, stream, dst, n, pos, stack=(0,))
+    return [int(v) for v in e.rf(dst, n)]
+
+
+set_param(0x1C3, 0)
+check("Shift 0: clip read identical to stock", clip_read(100) == stock_read(100) == list(range(100, 164)))
+set_param(0x1C3, 10)
+check("Shift +10 ms: reads 480 frames later", clip_read(0) == list(range(480, 544)))
+check("Shift +10 ms: wraps at the file end (seamless)", clip_read(500) == list(range(980, 1000)) + list(range(0, 44)))
+check("Shift +10 ms: past the end stays silent as stock", clip_read(990, 20) == list(range(470, 480)) + [0] * 10)
+set_param(0x1C3, -10)
+check("Shift -10 ms: downbeat reads the file's end", clip_read(0) == list(range(520, 584)))
+sliced = engine_pad()
+e.mu.mem_write(sliced + 0x254, b"\x01")
+set_param(0x1C3, 10)
+check("Shift on a sliced pad: ignored", clip_read(0, pad_=sliced) == list(range(0, 64)))
+seeks = []
+e.stub(0x080A4624, lambda uc: seeks.append(uc.reg_read(UC_ARM_REG_R1)))
+e.call(SYM["clip_seek_thunk"], stream, 992, regs=[(UC_ARM_REG_R4, cpad)])
+e.call(SYM["clip_seek_thunk"], stream, 100, regs=[(UC_ARM_REG_R4, cpad)])
+del e.stubs[0x080A4624]
+check("Shift: segment prefetch seek follows (wrapped)", seeks == [472, 580], seeks)
+set_param(0x1C3, 0)
+clip_loop = [struct.unpack_from("<6H", IMG, t + 2 * 0x5A - 0x08040000) for t in (0x080C6A1C, 0x080C6C38)]
+check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift",
+      all(m == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0) for m in clip_loop), clip_loop)
 
 # --- machine modes after the voice
 for name in ("SP1200", "SP-12", "S950", "MPC60", "SP Raw"):

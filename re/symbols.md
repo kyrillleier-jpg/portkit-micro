@@ -371,3 +371,53 @@ pkE: set_page schreibt die Zeilen beider Listen auf die Seite um (Adresse ^ 0x20
 (Kopfzeile wieder "Pads 1-8"/"Pads 9-16", Wrapper 0x0807F7E2 / 0x0807F7EC zurueck auf Stock). padpages_step
 (0x08076CEC-Ersatz) bleibt: Engine-Pfad, am Geraet nie aufgerufen, auf Seite 0 bitgleich.
 Tests: echte Init, echte Suche 0x080840C4 und echter Encoder-Fall in 0x08084154 auf Seite 1 → Befehl 0x63 mit 0x22.
+
+## Drive und Filter 2 (Build pkF, 2026-10-10)
+
+Neue Pad-Parameter (Vorgabe: neue Regler erlaubt, alte Presets → Defaults):
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| 0x08069E4C | Param-Tabelle eintragen | Eintrag 0x1C Bytes, Tabelle 0x32DC Bytes (0x08069F0A) → IDs bis 0x1D0; registriert sind Stock-IDs bis 0x17B | vermutet |
+| 0x08069ED4 | Knopf registrieren `(table, id, type, label, [sp] min, [sp+4] max, [sp+8] xml)` | Filter 0xAA: Typ 9, −1000..1000; Res 0x11: Typ 8, 0..1000 | vermutet |
+| 0x080B1AEA / 0x080A6CA4 | Engine-Param-Nachricht (Typ 0x39) | ID − 2 > 0x167 bzw. ID > 0x17A → ignoriert; Klasse-B-Handler nimmt Typ 0x39 nicht an | vermutet |
+| 0x0807D358 → 0x0807D8E8 | Knopf auf Pad (Ebene 0) | Store-Set im Pad-Record, dann Engine-Nachricht 0x080937F4 (s. o. ignoriert) | vermutet |
+| 0x08089548 | Pad-Record-Init | Kapazitaet 64 (0x0808949E); Typ 3: 58 Eintraege, Typ 0x45: 36; Filter 0xAA per 0x0808951E an 0x080896F8 / 0x08089922 | durch Emulation bestaetigt |
+| 0x08080030 / 0x0808056C | Preset schreiben / lesen | Writer: alle Store-Eintraege mit XML-Name (0x0806BD28); Reader: Record per Init (Defaults), dann nur vorhandene Attribute setzen | vermutet |
+| Seite 0 der 9 Pad-Tabellen | Hauptseite | Level, Pitch, Filter, Res, Pan (5); 0x080C6A1C, 0x080C6C38, 0x080C6EEC, 0x080C7108, 0x080C76C0, 0x080C78DC, 0x080C7AF8, 0x080C7E28, 0x080C8044 | vermutet |
+
+Belegung: 0x1C0 "Filter 2:" (Typ 9, −1000..1000, xml `pkfilt2`, Default 0 = aus), 0x1C1 "Res 2:" (Typ 8, 0..1000,
+`pkres2`, Default 500), 0x1C2 "Drive:" (Typ 8, 0..1000, `pkdrive`, Default 0). Registrierung in `interp_register`,
+Record-Eintraege per `pad_store_add` (Hook an beiden 0xAA-Stellen), Hauptseite: + Filter 2, Res 2, Drive (8 Eintraege wie
+die Sample-Einstellungsseite). Engine sieht die Werte nicht; `filter_process` liest sie aus dem App-Record (wie Interp).
+Keine LFO-/Mod-Ziele.
+DSP: Kette Crunch → Drive → Filter → Filter 2. Drive: Gain 1 + 15 d², rationale tanh x(27 + x²)/(27 + 9x²) bei |x| ≤ 3
+(musicdsp), Makeup Richtung 1/tanh(Gain), erste 10 % blenden von trocken ein. Res-Saettigung (Drive auf Res) entfernt.
+Filter-2-Zustand im Filterobjekt: +0x44..+0x5F (g, r, on, Stufe 1; Stock-Reset 0x080B8794 nullt den Bereich → on = 0) und
++0x74..+0x83 (Stufe 2, hinter ostate).
+Tests (`tests/test_fidelity.py`, Unicorn): Registrierung, Records Typ 3 / 0x45 mit Defaults, Filter 2 LP/HP, Serie,
+Bandpass, Drive (Bypass bei 0, begrenzt, Oberwellen, Makeup), Res linear, Reset, Hauptseiten. Test-Heap nach D2-SRAM
+verlegt (lief vorher in den Allocator-Bereich 0x24040000). Nicht emuliert: UI der Hauptseite, Preset-Datei, CPU-Last
+bei vielen Stimmen. Status: nicht am Geraet.
+
+## Shift fuer Clips (Build pkG, 2026-10-10)
+
+Wunsch: Shift ±100 ms, Loop-Punkt verschieben; Variante "Loop drehen" (Inhalt rotiert gegen das Raster, Laenge/Sync bleiben).
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| 0x080B5AA8 → 0x080B5728 → 0x080B55AC | Clip-Stimme → Slot lesen → Frames holen | r0 = Pad (Klasse B); Slot = Pad + 0x30 + i·0x70 (4 Slots), Slot+8 int64 = absolute Datei-Position, an 0x080B55AC als r2/r3 | vermutet |
+| 0x080B4644 / 0x080B490C | Segment-Start (Clip / Slicer) | Clip: Start = Segment·(Pad+0x1FC), Anzahl Pad+0x240; Slot+8 = Start; Prefetch-Seek 0x080A4624(stream, max(Start−8, 0)) an 0x080B47D2 / 0x080B4B4C; Pad+0x254/+0x250 = Slices | vermutet |
+| 0x080A4500 | Stream lesen, ein Kanal `(stream, dst, n, pos, [sp] ch)` | Quelle (+0x20) per vtable+8, sonst Speicher: Ebene +4/+8, Frames +0x10, hinter dem Ende Nullen | durch Emulation bestaetigt |
+| 0x080A44C8 | Stream lesen, beide Kanaele `(stream, l, r, n, [sp] pos)` | nur Quelle (gestreamt) | vermutet |
+| 0x080A45AC | Frame-Anzahl | Speicher: +0x10; Quelle: vtable+0x14, 0 → 0x10000000 (unbekannt) | vermutet |
+| Pad+0x24 | Stream des Pads | | vermutet |
+
+Umsetzung (`src/clipshift.c`, `src/clipshift_thunk.S`, `patches/sound.py`): Parameter 0x1C3 "Shift ms:" (Typ 1, −100..100,
+xml `pkshift`, Default 0) auf der Loop-Seite der Clip-Tabellen (0x080C6A1C, 0x080C6C38, Seite 2: Loop Mode, Beat Count,
+Quant Size, Sync, Shift). Die 4 Lese- und 2 Seek-Aufrufe bekommen den Pad (r4) als letztes Argument; jede Lesung
+[pos, pos+n) innerhalb der Datei wird auf (pos + Shift) mod Frames abgebildet, am Dateiende geteilt; Positionen hinter
+dem Ende bleiben (Stille). Slicer-Pads (+0x254) und unbekannte Laenge: kein Shift. 1 ms = 48 Frames (Datei-Frames).
+Offen: Prefetch beim Umbruch an der Naht (gestreamte Dateien) springt nicht vor; ob es dort zu einem Aussetzer kommt,
+nur am Geraet pruefbar. Tests: Speicher-Stream mit echtem 0x080A4500 (Shift 0 = Stock, ±10 ms, Umbruch, Ende, Slices,
+Seek), Loop-Seite.

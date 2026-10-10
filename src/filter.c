@@ -14,8 +14,10 @@
  *   2. Filter: 24 dB/oct, two of the trapezoidal state-variable filters from Emilie Gillet's stmlib (dsp/filter.h,
  *      class Svf; MIT licence, Copyright 2014 Emilie Gillet) in series: the first at a fixed Butterworth Q, the second
  *      carrying the Res knob. Cutoff and resonance go through the stock curves, so the Filter and Res knobs keep
- *      their ranges. Drive rides on Res: below the default (noon) the filter is clean; from noon to full the input is
- *      pushed into a soft clipper (up to +12 dB) and the resonant integrator is soft-limited.
+ *      their ranges.
+ *   3. Drive and a second filter (portkit, new pad parameters on the main page): Drive (0x1c2) pushes the voice into
+ *      a tanh saturator before the filters; Filter 2 (0x1c0, bipolar like Filter) and Res 2 (0x1c1) are a second
+ *      24 dB filter of the same kind in series after the first. Chain: crunch -> drive -> filter -> filter 2.
  * State lives in the stock filter object, in the part only the stock process function used (re/symbols.md,
  * "Filterobjekt-Layout").
  * Stock firmware treats the new Interp values as HighQ (the engine only tests != 0), so presets stay loadable there.
@@ -45,6 +47,13 @@ typedef void (*register_fn)(void *table, int param, const char *label, const cha
 #define PI_F       3.14159265f
 #define OBJ_PARAMS 0x84          /* filter object -> its parameter block: Filter knob @+8, Res @+0x44 */
 #define P_INTERP   0xd2          /* Interp / Fidelity (Blackbox: 0xf1) */
+/* New pad parameters. The parameter table holds ids up to 0x1d0 (0x08069e4c), the engine ignores ids above 0x17a
+   (0x080b1aea, 0x080a6ca4), so the app keeps them in the pad record (presets: xml name) and the engine never sees
+   them; filter_process reads them from the record like Interp. */
+#define P_FILT2    0x1c0         /* Filter 2: -1000 (low-pass) .. 0 (off) .. 1000 (high-pass), like Filter (0xaa) */
+#define P_RES2     0x1c1         /* Res 2: 0 .. 1000, default 500 like Res (0x11) */
+#define P_DRIVE    0x1c2         /* Drive: 0 .. 1000 */
+#define P_SHIFT    0x1c3         /* Shift (clips, src/clipshift.c): -100 .. 100 ms */
 
 static const float crunch_rate[] = {16000.0f, 12000.0f, 10000.0f, 8000.0f, 6000.0f, 4000.0f, 2000.0f};
 #define CRUNCHES ((int)(sizeof crunch_rate / sizeof crunch_rate[0]))
@@ -89,17 +98,42 @@ const char *const interp_names[STOCK_INTERP + CRUNCHES + MACHINES] = {
 
 /* Replaces the Interp list registration call (0x0806b34a): 2 -> 14 entries, label "Interp:" -> "Fidelity:". The xml
    name "interpqual" stays, so presets are unaffected. */
+typedef void (*register_knob_fn)(void *table, int param, int type, const char *label, int min, int max,
+                                 const char *xml);
+#define fw_register_knob ((register_knob_fn)FN(0x08069ed4))  /* type 8: 0..max, type 9: bipolar (Filter 0xaa) */
+
 void interp_register(void *table, int param, const char *label, const char *const *names, int count, const char *xml)
 {
     (void)label;
     (void)names;
     (void)count;
     fw_register_list(table, param, "Fidelity:", interp_names, STOCK_INTERP + CRUNCHES + MACHINES, xml);
+    /* the new pad parameters, registered next to it (same table) */
+    fw_register_knob(table, P_FILT2, 9, "Filter 2:", -1000, 1000, "pkfilt2");
+    fw_register_knob(table, P_RES2, 8, "Res 2:", 0, 1000, "pkres2");
+    fw_register_knob(table, P_DRIVE, 8, "Drive:", 0, 1000, "pkdrive");
+    fw_register_knob(table, P_SHIFT, 1, "Shift ms:", -100, 100, "pkshift");   /* type 1: integer, like Transpose */
+}
+
+/* Pad record init (0x08089548): its two pad blocks add Filter (0xaa) through 0x0808951e (0x080896f8, 0x08089922);
+   the new parameters go in right after it, with their defaults. Records hold 64 entries (0x0808949e), pads use 58.
+   Presets without them keep these defaults: the reader (0x0808056c) inits the record, then sets only the attributes
+   it finds. */
+typedef void (*store_add_fn)(void *store, unsigned param, int value);
+#define fw_store_add ((store_add_fn)FN(0x0808951e))
+
+void pad_store_add(void *store, unsigned param, int value)
+{
+    fw_store_add(store, param, value);
+    fw_store_add(store, P_FILT2, 0);
+    fw_store_add(store, P_RES2, 500);
+    fw_store_add(store, P_DRIVE, 0);
+    fw_store_add(store, P_SHIFT, 0);
 }
 
 struct fstate {                  /* at filter object +4..+0x44; the stock coefficient sets and states used to live here */
     uint32_t magic;
-    float g, r, drive;           /* smoothed: SVF frequency coefficient, damping of the resonant stage, drive 0..1 */
+    float g, r, drive;           /* smoothed: SVF frequency coefficient, damping of the resonant stage, Drive 0..1 */
     float s1[2][2], s2[2][2];    /* integrator states [stage][channel] */
     float phase, held[2];        /* crunch: hold phase and held sample per channel */
     uint32_t on;                 /* filter was running last block; the stock voice-start reset (0x080b8794) zeroes it */
@@ -108,7 +142,21 @@ struct fstate {                  /* at filter object +4..+0x44; the stock coeffi
 #define R_BUTTERWORTH 1.84776f   /* 1 / 0.5412: first stage of a 4-pole Butterworth */
 #define SMOOTH 0.33333f          /* per-block coefficient smoothing, as the stock filter */
 
-_Static_assert(4 + sizeof(struct fstate) <= 0x60, "fstate must stay below the ostate at +0x60");
+_Static_assert(4 + sizeof(struct fstate) == 0x44, "fstate at +4..+0x43");
+
+/* Filter 2's state, in the two parts of the object nobody else uses: +0x44..+0x5f (zeroed with `on` by the voice-start
+   reset 0x080b8794, so on2 = 0 there) and +0x74..+0x83 (after the machine output stage's ostate). */
+struct f2head {
+    float g, r;                  /* smoothed, as in fstate */
+    uint32_t on;                 /* running last block */
+    float s1[2], s2[2];          /* first stage, per channel */
+};
+struct f2tail {
+    float s1[2], s2[2];          /* second (resonant) stage */
+};
+#define F2HEAD 0x44
+#define F2TAIL 0x74
+_Static_assert(F2HEAD + sizeof(struct f2head) <= 0x60, "f2head inside the reset range +0x40..+0x5f");
 
 /* tan(x) for 0 <= x < 1.45, Pade (3,2); 3% low at the top of the range, exact enough below. */
 static float tan_approx(float x)
@@ -132,7 +180,8 @@ struct ostate {
 };
 #define OMAGIC 0x4d4f5554u       /* "MOUT" */
 
-_Static_assert(0x60 + sizeof(struct ostate) <= OBJ_PARAMS, "ostate must stay below the parameter pointer at +0x84");
+_Static_assert(0x60 + sizeof(struct ostate) <= F2TAIL, "ostate must stay below filter 2's tail");
+_Static_assert(F2TAIL + sizeof(struct f2tail) <= OBJ_PARAMS, "f2tail must stay below the parameter pointer at +0x84");
 
 static void out_stage(uint8_t *obj, float **ch, int n, const float *c)
 {
@@ -179,51 +228,71 @@ static void crunch(struct fstate *st, float **ch, int n, float rate)
     st->held[1] = held1;
 }
 
-/* Soft clip, unity gain at zero, flat at |x| = 1.5 t, ceiling t: t * (u - 4/27 u^3), u = x / t. */
-static inline __attribute__((always_inline)) float soft(float x, float inv_t, float t)
-{
-    float u = x * inv_t;
-    u = u > 1.5f ? 1.5f : u < -1.5f ? -1.5f : u;
-    return t * u * (1.0f - 0.148148f * u * u);
-}
-
 /*
  * stmlib Svf::Process<FILTER_MODE_LOW_PASS / HIGH_PASS> for one channel with coefficients fixed for the block.
- * CLIP: soft-limit the band-pass integrator (the resonant loop); only used on the resonant stage while driven.
  */
-#define SVF_LOOP(OUT, NEXT_S1)                                                                                     \
+#define SVF_LOOP(OUT)                                                                                              \
     for (int i = 0; i < n; i++) {                                                                                  \
         float hp = (x[i] - rg * s1 - s2) * h;                                                                      \
         float bp = g * hp + s1;                                                                                    \
-        s1 = NEXT_S1;                                                                                              \
+        s1 = g * hp + bp;                                                                                          \
         float lp = g * bp + s2;                                                                                    \
         s2 = g * bp + lp;                                                                                          \
         x[i] = OUT;                                                                                                \
     }
 
-static void svf(float *x, int n, float g, float r, float *s1p, float *s2p, int highpass, float limit)
+static void svf(float *x, int n, float g, float r, float *s1p, float *s2p, int highpass)
 {
     float h = 1.0f / (1.0f + r * g + g * g), rg = r + g, s1 = *s1p, s2 = *s2p;
-    if (limit > 0.0f) {
-        float inv = 1.0f / limit;
-        if (highpass)
-            SVF_LOOP(hp, soft(g * hp + bp, inv, limit))
-        else
-            SVF_LOOP(lp, soft(g * hp + bp, inv, limit))
-    } else if (highpass) {
-        SVF_LOOP(hp, g * hp + bp)
+    if (highpass) {
+        SVF_LOOP(hp)
     } else {
-        SVF_LOOP(lp, g * hp + bp)
+        SVF_LOOP(lp)
     }
     *s1p = s1;
     *s2p = s2;
 }
 
-static void drive_in(float *x, int n, float amount)
+/* tanh, rational (musicdsp "rational tanh approximation"): x (27 + x^2) / (27 + 9 x^2), clamped at |x| = 3 where it
+   meets +-1 with zero slope. Error a few percent, one division. */
+static inline __attribute__((always_inline)) float tanh_r(float x)
 {
-    float pre = 1.0f + 3.0f * amount;
-    for (int i = 0; i < n; i++)
-        x[i] = soft(x[i] * pre, 1.0f, 1.0f);
+    x = x > 3.0f ? 3.0f : x < -3.0f ? -3.0f : x;
+    float x2 = x * x;
+    return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+}
+
+/*
+ * Drive: gain 1 + 15 d^2 (up to +24 dB) into tanh, then makeup towards 1 / tanh(gain) so a full-scale peak stays
+ * near full scale while quieter parts come up; the first 10 % of the knob fade in from dry, so there is no step.
+ */
+static void drive_stage(float *x, int n, float d)
+{
+    float gain = 1.0f + 15.0f * d * d;
+    float makeup = (1.0f - d) + d / tanh_r(gain);
+    float wet = d * 10.0f;
+    wet = wet > 1.0f ? 1.0f : wet;
+    for (int i = 0; i < n; i++) {
+        float y = tanh_r(x[i] * gain) * makeup;
+        x[i] += wet * (y - x[i]);
+    }
+}
+
+/* knob (-1 .. 1, 0 = off: low-pass left, high-pass right) and Res (0 .. 1) -> SVF g and r, through the stock curves */
+static void svf_coeffs(float knob, float res, float *g, float *r)
+{
+    float hz = fw_cutoff_hz(knob < 0.0f ? knob + 1.0f : knob);
+    float q = fw_res_q(res);
+    if (hz < 10.0f)
+        hz = 10.0f;
+    if (hz > 0.45f * FS)
+        hz = 0.45f * FS;
+    if (!(q > 0.1f))
+        q = 0.1f;                                            /* the stock curve's own minimum (Res at 0) */
+    if (q > 40.0f)
+        q = 40.0f;
+    *g = tan_approx(PI_F * hz / FS);
+    *r = 1.0f / q;
 }
 
 /*
@@ -237,7 +306,7 @@ typedef int (*setting_fn)(const void *store, unsigned param);
 #define fw_setting ((setting_fn)FN(0x080894d0))
 #define APP_PADS   (0x24013cb0u + 0x1840u)
 
-static unsigned pad_setting(const uint8_t *pad, unsigned param)
+unsigned pad_setting(const uint8_t *pad, unsigned param)
 {
     if (!pad)
         return 0;
@@ -253,27 +322,40 @@ static unsigned pad_interp(const uint8_t *pad)
     return pad_setting(pad, P_INTERP);
 }
 
+static float clamp1(float x, float lo)
+{
+    return x < lo ? lo : x > 1.0f ? 1.0f : x;
+}
+
 /* Replaces the per-voice filter call. pad = the pad object the voice belongs to (thunks in filter_thunk.S). */
 void filter_process(uint8_t *obj, void *buf, const uint8_t *pad)
 {
     if (fw_buf_silent(buf))
         return;
     struct fstate *st = (struct fstate *)(obj + 4);
+    struct f2head *f2 = (struct f2head *)(obj + F2HEAD);
+    struct f2tail *t2 = (struct f2tail *)(obj + F2TAIL);
     if (st->magic != MAGIC) {
         uint32_t *w = (uint32_t *)st;
         for (unsigned i = 0; i < sizeof *st / 4; i++)
             w[i] = 0;
+        f2->on = 0;
         st->magic = MAGIC;
     }
     unsigned interp = pad_interp(pad);
     int crunching = interp >= STOCK_INTERP && interp < STOCK_INTERP + CRUNCHES + MACHINES;
     uint8_t *params = *(uint8_t **)(obj + OBJ_PARAMS);
     float knob = params ? fw_param(params + 8) : 0.0f;
-    if (knob == 0.0f) {
+    float knob2 = clamp1((float)(int)pad_setting(pad, P_FILT2) * 0.001f, -1.0f);
+    float drive = clamp1((float)(int)pad_setting(pad, P_DRIVE) * 0.001f, 0.0f);
+    if (knob == 0.0f)
         st->on = 0;
-        if (!crunching)
-            return;
-    }
+    if (knob2 == 0.0f)
+        f2->on = 0;
+    if (drive == 0.0f)
+        st->drive = 0.0f;
+    if (knob == 0.0f && knob2 == 0.0f && drive == 0.0f && !crunching)
+        return;
 
     float *ch[2] = {0, 0};
     int n = fw_buf_frames(buf);
@@ -295,45 +377,56 @@ void filter_process(uint8_t *obj, void *buf, const uint8_t *pad)
     } else if (crunching) {
         crunch(st, ch, n, crunch_rate[interp - FIRST_CRUNCH]);
     }
-    if (knob == 0.0f || !params)
-        return;
 
-    float hz = fw_cutoff_hz(knob < 0.0f ? knob + 1.0f : knob);
-    float res = fw_param(params + 0x44);
-    float q = fw_res_q(res);
-    float drive = (res - 0.5f) * 2.0f;                      /* 0 up to the default Res, 1 at full */
-    drive = drive < 0.0f ? 0.0f : drive > 1.0f ? 1.0f : drive * drive;
-    if (hz < 10.0f)
-        hz = 10.0f;
-    if (hz > 0.45f * FS)
-        hz = 0.45f * FS;
-    if (!(q > 0.1f))
-        q = 0.1f;                                            /* the stock curve's own minimum (Res at 0) */
-    if (q > 40.0f)
-        q = 40.0f;
-    float g = tan_approx(PI_F * hz / FS), r = 1.0f / q;
-    if (!st->on) {
-        st->g = g;
-        st->r = r;
-        st->drive = drive;
-        for (int k = 0; k < 2; k++)
-            st->s1[k][0] = st->s1[k][1] = st->s2[k][0] = st->s2[k][1] = 0.0f;
-        st->on = 1;
-    } else {
-        st->g += SMOOTH * (g - st->g);
-        st->r += SMOOTH * (r - st->r);
+    if (drive > 0.0f) {
         st->drive += SMOOTH * (drive - st->drive);
+        for (int c = 0; c < 2; c++)
+            if (ch[c])
+                drive_stage(ch[c], n, st->drive);
     }
-    int hp = knob > 0.0f;
-    /* resonant stage ceiling: off below noon (clean, linear), from 4 down to 1 as drive rises */
-    float limit = st->drive > 0.001f ? 4.0f - 3.0f * st->drive : 0.0f;
-    for (int c = 0; c < 2; c++) {
-        if (!ch[c])
-            continue;
-        if (st->drive > 0.001f)
-            drive_in(ch[c], n, st->drive);
-        svf(ch[c], n, st->g, R_BUTTERWORTH, &st->s1[0][c], &st->s2[0][c], hp, 0.0f);
-        svf(ch[c], n, st->g, st->r, &st->s1[1][c], &st->s2[1][c], hp, limit);
+
+    if (knob != 0.0f && params) {
+        float g, r;
+        svf_coeffs(knob, fw_param(params + 0x44), &g, &r);
+        if (!st->on) {
+            st->g = g;
+            st->r = r;
+            for (int k = 0; k < 2; k++)
+                st->s1[k][0] = st->s1[k][1] = st->s2[k][0] = st->s2[k][1] = 0.0f;
+            st->on = 1;
+        } else {
+            st->g += SMOOTH * (g - st->g);
+            st->r += SMOOTH * (r - st->r);
+        }
+        int hp = knob > 0.0f;
+        for (int c = 0; c < 2; c++) {
+            if (!ch[c])
+                continue;
+            svf(ch[c], n, st->g, R_BUTTERWORTH, &st->s1[0][c], &st->s2[0][c], hp);
+            svf(ch[c], n, st->g, st->r, &st->s1[1][c], &st->s2[1][c], hp);
+        }
+    }
+
+    if (knob2 != 0.0f) {
+        float g, r;
+        svf_coeffs(knob2, clamp1((float)(int)pad_setting(pad, P_RES2) * 0.001f, 0.0f), &g, &r);
+        if (!f2->on) {
+            f2->g = g;
+            f2->r = r;
+            f2->s1[0] = f2->s1[1] = f2->s2[0] = f2->s2[1] = 0.0f;
+            t2->s1[0] = t2->s1[1] = t2->s2[0] = t2->s2[1] = 0.0f;
+            f2->on = 1;
+        } else {
+            f2->g += SMOOTH * (g - f2->g);
+            f2->r += SMOOTH * (r - f2->r);
+        }
+        int hp = knob2 > 0.0f;
+        for (int c = 0; c < 2; c++) {
+            if (!ch[c])
+                continue;
+            svf(ch[c], n, f2->g, R_BUTTERWORTH, &f2->s1[c], &f2->s2[c], hp);
+            svf(ch[c], n, f2->g, f2->r, &t2->s1[c], &t2->s2[c], hp);
+        }
     }
 }
 

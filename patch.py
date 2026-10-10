@@ -1,6 +1,6 @@
 """Apply byte patches to the stock bitbox micro 2.3.4 firmware and write an SD-card-ready MICRO.BIN.
 
-  python3 patch.py fidelity pages padpages cave        (run ./build.sh first)
+  python3 patch.py fidelity pages padpages sound cave        (run ./build.sh first)
 
 Each patchset in patches/ is a module defining PATCHES = [(addr, old_bytes, new_bytes), ...]. Every patch verifies the
 stock bytes before writing, so a patch built for the wrong firmware fails loudly. After patching, verify():
