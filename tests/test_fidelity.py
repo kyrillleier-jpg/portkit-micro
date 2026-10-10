@@ -1,10 +1,10 @@
-"""Unicorn tests for patches/fidelity.py and patches/pages.py on the patched image (out/fidelity+pages+padpages+sound+cave/MICRO.BIN).
+"""Unicorn tests for patches/fidelity.py and patches/pages.py on the patched image (out/fidelity+pages+padpages+sound+reverb+cave/MICRO.BIN).
 
 Real firmware code runs for: the Interp registration call, the app pad store (init 0x08089fc4, get/set), the stock
 cutoff / resonance curves, the parameter evaluator, the audio-buffer accessors, the two resampling kernels and the
 voice-start filter reset. Only the allocator (0x08042dc0) is replaced, by a bump allocator.
 
-  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity pages padpages sound cave)
+  python3 -I tests/test_fidelity.py        (after ./build.sh and patch.py fidelity pages padpages sound reverb cave)
 """
 import math
 import os
@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "patches"))
 from thumb import BASE, bl_target, symbols  # noqa: E402
 
-IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+cave", "MICRO.BIN"), "rb").read()
+IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+reverb+cave", "MICRO.BIN"), "rb").read()
 SYM = symbols(os.path.join(ROOT, "out", "cave.elf"))
 
 APP_PADS = 0x24013CB0 + 0x1840
@@ -53,7 +53,7 @@ class Emu:
         mu.mem_map(0x24000000, 0x80000)          # AXI SRAM
         mu.reg_write(UC_ARM_REG_C1_C0_2, 0xF << 20)   # FPU on
         mu.reg_write(UC_ARM_REG_FPEXC, 0x40000000)
-        mu.mem_map(0x30000000, 0x200000)
+        mu.mem_map(0x30000000, 0x1000000)
         mu.mem_map(0xE0000000, 0x100000)         # SCS: DWT cycle counter, DEMCR (load meter)
         self.heap = 0x30000000                   # scratch for test objects (D2 SRAM; clear of PARK / pad state)
         self.alloc_at = 0x24040000               # bump allocator for the firmware's own allocations
@@ -83,7 +83,7 @@ class Emu:
     def new(self, size):
         p = self.heap
         self.heap += (size + 15) & ~15
-        assert self.heap <= 0x30200000, "test heap exhausted"
+        assert self.heap <= 0x31000000, "test heap exhausted"
         self.mu.mem_write(p, bytes(size))
         return p
 
@@ -646,11 +646,11 @@ check("segment start, Stretch -100 %: segment 3 at 36000 (half speed); +50 %: 10
 from capstone import CS_ARCH_ARM, CS_MODE_MCLASS, CS_MODE_THUMB, Cs  # noqa: E402
 _md = Cs(CS_ARCH_ARM, CS_MODE_THUMB | CS_MODE_MCLASS)
 _md.skipdata = True
-_ours = {f"#{v:#x}" for v in (0x1C0, 0x1C1, 0x1C2, 0x1C3, 0x1C4, 0x1C6, 0x1C7)}
+_ours = {f"#{v:#x}" for v in (0x1C0, 0x1C1, 0x1C2, 0x1C3, 0x1C4, 0x1C6, 0x1C7, *range(0x191, 0x19B))}
 _uses = [hex(i.address) for i in _md.disasm(IMG[:0x080BC000 - 0x08040000], 0x08040000)   # code, not the data after it
          if i.mnemonic in ("movs", "movw", "mov.w", "cmp", "cmp.w") and "sp" not in i.op_str
          and any(i.op_str.endswith(v) for v in _ours)]
-check("new parameter ids 0x1c0-0x1c4, 0x1c6, 0x1c7: no immediate use in the stock code", not _uses, _uses)
+check("new parameter ids 0x1c0-0x1c4, 0x1c6, 0x1c7, 0x191-0x19a: no immediate use in the stock code", not _uses, _uses)
 
 # --- smooth time stretch (WSOLA, clip_render in place of 0x080b55ac), real stream reads on an in-memory mono stream
 SR = 48000

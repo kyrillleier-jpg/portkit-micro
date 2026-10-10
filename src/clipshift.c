@@ -264,9 +264,24 @@ static int list_has(const uint8_t *list, unsigned param)
     return 0;
 }
 
+unsigned reverb_type_of(const void *rec);             /* reverb.c */
+extern const uint16_t reverb_param_ids[];
+#define P_RVB_TYPE 0x178
+#define APP_FX     0x2200u                             /* app + 0x2200 + row x 0x18: FX cell records */
+
 int clip_page(void *app, const void *msg, void *list, int arg)
 {
     int r = fw_page(app, msg, list, arg);
+    /* reverb cell (FX layer 3): with Type = Plate (stock) the new settings do nothing, so they are not shown */
+    if (list_has(list, P_RVB_TYPE)) {
+        unsigned code = *(const uint16_t *)((const uint8_t *)msg + 4);
+        unsigned row = (code >> 4) & 0xfu;
+        if (((code >> 8) & 0x1fu) == 3 && row < 5
+            && reverb_type_of((const uint8_t *)app + APP_FX + row * 0x18u) == 0)
+            for (const uint16_t *p = reverb_param_ids; *p; p++)
+                fw_list_remove(list, *p);
+        return r;
+    }
     if (!list_has(list, P_PLAYLEN) && !list_has(list, P_STRETCH) && !list_has(list, P_SMODE))
         return r;
     const void *rec = fw_record(app, msg);

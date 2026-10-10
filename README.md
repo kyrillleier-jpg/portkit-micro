@@ -13,22 +13,25 @@ bitbox micro, Firmware 2.3.4. Keine Firmware in diesem Repo: Der Patcher arbeite
 | Shift fuer Clips (−100..100 ms, dreht den Loop gegen das Raster; Loop-Seite der Clip-Pads, `src/clipshift.c`) | pkI am Geraet: funktioniert |
 | Abspiellaenge fuer Clips (Play Len: Full, 1/4..32 Takte; Loop-Seite, mit Sync) | pkH: durch Emulation bestaetigt, nicht am Geraet |
 | Stretch fuer Clips (±100 %, stufenlos ueber die Segment-Startpositionen, braucht Sync; Loop-Seite) | pkQ am Geraet: funktioniert (Jump) |
-| Smooth Time-Stretch (WSOLA, Tonhoehe bleibt), Stretch Mode Auto/Jump/Smooth; Audio-Last rechts in der Kopfzeile | pkR: durch Emulation bestaetigt, nicht am Geraet |
+| Smooth Time-Stretch (WSOLA, Tonhoehe bleibt), Stretch Mode Auto/Jump/Smooth | pkR am Geraet: funktioniert |
+| Audio-Last rechts in der Kopfzeile | pkS: korrigiert, nicht am Geraet |
+| Reverb-Typen Plate / Room / Hall / Chamber mit 10 Reglern (`patches/reverb.py`) | pkT: durch Emulation bestaetigt, nicht am Geraet |
 | Sync-Raster 1/32 (Clips); Play Len / Stretch ausgeblendet, wenn Quant Size / Sync sie unwirksam machen | pkK: durch Emulation bestaetigt, nicht am Geraet |
 | Machine-Drive (Saturation als Wandler-Eingang) | nicht portiert (Micro hat keinen Saturation-Parameter) |
 | Fidelity auch auf der Pad-Seite von Clip, Slicer, Granular (`patches/pages.py`) | durch Emulation bestaetigt, nicht am Geraet |
 | Pads 9-16 als zweite Seite des Pad-Rasters (`patches/padpages.py`), Umschalten nur per Button: Pads = Linkspfeil, Mixer = Feld oben links, Effects = erneuter Druck auf die gewaehlte Zelle DLY/RVB, Pad-Waehler = Linkspfeil (Pad-Namen 5 Zeichen, folgt der Seite des markierten Pads); Encoder waehlt innerhalb der Seite | pkB am Geraet: Seiten und Waehler gehen; pkE: Encoder auf Seite 2 (Encoder-Listen des Pads-Bildschirms), nicht am Geraet |
 
-Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkS`.
+Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkT`.
 
 ## Bauen
 
 ```sh
 ./setup.sh                                  # Repos, venv, Hash-Check; firmware/MICRO.BIN muss 2.3.4 sein
 ./build.sh                                  # src/ -> out/cave.elf, out/cave.bin
-.venv/bin/python -I patch.py fidelity pages padpages sound cave  # -> out/fidelity+pages+padpages+sound+cave/MICRO.BIN
+.venv/bin/python -I patch.py fidelity pages padpages sound reverb cave  # -> out/fidelity+pages+padpages+sound+reverb+cave/MICRO.BIN
 .venv/bin/python -I tests/test_fidelity.py  # Unicorn-Tests auf dem gepatchten Image
 .venv/bin/python -I tests/test_padpages.py
+.venv/bin/python -I tests/test_reverb.py
 ```
 
 `patch.py` schreibt nur, wenn alles gruen ist: Stock-Hash, erwartete Stock-Bytes an jeder Stelle, Null-Repack,

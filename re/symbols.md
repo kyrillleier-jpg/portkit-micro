@@ -597,3 +597,26 @@ Layout der Statusleiste (Ctor 0x080704C0, Emulation): +0x34 Takt:Schlag {10, 222
 +0x8C Aufnahme-Text {80, 222, 48, 20} (Ausrichtung +0xDF = 6), +0x13C Titel, +0x194 Fortschritt {256, 224, 63, 12};
 App-Flag app+0x7FF8 (bereit) wird einmal gesetzt (0x080751F8), Texte also bei jedem Zeichnen.
 pkS: Hook an 0x08070754 (leerer Fall), Feld nach rechts {280, 222, 39, 20}.
+
+## Reverb-Typen (Build pkT, 2026-10-10)
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| 0x080A9AFC | Reverb-Ctor (Objekt 0x1A0, Engine-ID 0x30100 an 0x08095D96) | Param-Slots Decay +0xB0, Damping +0xEC, Predelay +0x128, Wet +0x164; Zustand +0x58 (0xB0 Byte) | vermutet |
+| 0x080A9C94 | Plate-Zustand init | 12 Puffer an Zustandswort 8, 11, 14, 17 (512), 20, 25 (1024), 30, 33, 37, 39, 41, 43 (8192) = Blackbox-Layout; ≤ 0x42CC Byte im DTCM (0x08042DFC), sonst 0x08042DC0 | durch Emulation bestaetigt |
+| 0x080A9690 | Reverb-Prozess | state[0] = Decay × 0,93 (0x080A99D8), state[1] = Damping, Predelay 12000 × x + 256; Kern-Aufruf 0x080A9912: 0x080A9EC4(state, in, outL, outR, [sp] n) bei 29,8 kHz (0x080A9C74) | vermutet |
+| 0x080A9EC4 | Plate-Kern (Dattorro), einziger Aufrufer 0x080A9912 | Konstanten 0,625 / 0,7 bei 0x080A9EB0 | vermutet |
+| app+0x2200 + Zeile × 0x18 | FX-Zellen-Records (0x0807D854) | Reverb = Zeile 1 (0x310) = app+0x2218, Typ 0x44, Defaults 0x08089AA0: Decay 600, Predelay 40, Damping 500 | durch Emulation bestaetigt |
+| 0x08076EE0 → 0x08083744 | Seitenaufbau FX-Zelle | Liste = alle Record-Eintraege in Reihenfolge (max 0x30) | vermutet |
+| 0x178 "FX2" (Delay/Reverb) | Liste, Registrierung 0x0806B89A | sonst unbenutzt; globaler Handler 0x080A6C3C: Default-Fall | vermutet |
+
+Umsetzung (`src/reverb.c`, `src/reverb_thunk.S`, `patches/reverb.py`): 0x178 → "Type:" Plate / Room / Hall / Chamber
+(Default Plate), zehn Regler 0x191–0x19A (Typ 8, 0..1000): Size, Diffusion, Bass Mult, Crossover, Mod Rate, Mod Depth,
+Early, Width, Hi Cut, Lo Cut; im Record nach Type, Decay, Predelay, Damping (Hooks 0x08089AA8 / 0x08089ABE), bei Plate
+ausgeblendet (clip_page). Kern-Hook 0x080A9912 (EXCLUSIVE). Hall / Chamber: eigener Tank nach Griesinger/Dattorro
+(Dattorro 1997), Zwei-Band-Decay, modulierte Allpaesse, ER, Hi/Lo Cut; Room: blackbox-mod-FDN mit den neuen Reglern.
+Zustand 0x2406D000 (Objekt-Zeiger 0x2406CFF0). Patch-RAM-Belegung: C000 Micro-Patcher, C100 PARK, C110 Pad-Seiten,
+C1C0 Last, C400–CDFF WSOLA, CFF0 / D000 Reverb.
+Tests (`tests/test_reverb.py`, echter Init und Plate-Kern): Plate bitgleich, Impulsantworten (Hall RT60 0,55 / 3,6 s bei
+Decay 30 / 70 %), L/R-Korrelation ≈ 0, Stabilitaet bei vollem Decay, Bass Mult, Early, Seitenfilter. Aufwand: Plate
+~9,5 M Instr./s, Hall/Chamber ~20 M, Room ~32 M (bei 29,8 kHz). Hoerproben out/reverb_preview (nicht im Repo).
