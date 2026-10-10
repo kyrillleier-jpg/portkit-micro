@@ -269,9 +269,13 @@ extern const uint16_t reverb_param_ids[];
 #define P_RVB_TYPE 0x178
 #define APP_FX     0x2200u                             /* app + 0x2200 + row x 0x18: FX cell records */
 
+int master_page(void *app, const void *msg, uint8_t *list);
+
 int clip_page(void *app, const void *msg, void *list, int arg)
 {
     int r = fw_page(app, msg, list, arg);
+    if (master_page(app, msg, list))                   /* master.c: Compressor / Distortion on the settings page */
+        return r;
     /* reverb cell (FX layer 3): with Type = Plate (stock) the new settings do nothing, so they are not shown */
     if (list_has(list, P_RVB_TYPE)) {
         unsigned code = *(const uint16_t *)((const uint8_t *)msg + 4);

@@ -111,7 +111,7 @@ typedef int (*snprintf_fn)(char *buf, unsigned size, const char *fmt, ...);
 struct pstate {
     uint32_t magic;
     uint8_t page;                /* 0: pads 1-8, 1: pads 9-16; read by the thunks at +4 */
-    uint8_t fx3;                 /* Effects screen: its right cell is FX3 (0x320) instead of RVB (0x310); read by the
+    uint8_t fx3;                 /* Effects screen: its right cell is FX3 (0x330) instead of RVB (0x310); read by the
                                     send-id thunks at +5 */
     uint8_t busy;                /* inside a page switch */
     uint8_t pad0;
@@ -329,7 +329,7 @@ void padpages_b_notify(void *scr, const struct note *n)
 
 /* --- Effects screen (A): a second touch on the selected right cell switches it RVB <-> FX3 (pages: left arrow) ----- */
 #define FX_RVB   0x310
-#define FX_FX3   0x320
+#define FX_FX3   0x330                                 /* FX cell row 3 (row 2, 0x320, is the master EQ) */
 #define RVB_TILE 0xed4                                 /* the right cell (button, id at +0x38, label 0x0805dcdc) */
 typedef void (*label_fn)(void *tile, const char *name);
 #define fw_tile_label ((label_fn)FN(0x0805dcdc))
@@ -391,8 +391,12 @@ static void toggle(void *from)
 
 /* padpages_thunk.S: left_arrow, at the button handler 0x080839e6. Pads screen: toggle and select the pad at the same
    place; an open pad picker of the current screen: toggle (its back function is dropped then). Returns 1 if taken. */
+int master_left(uint8_t *app);         /* master.c */
+
 int padpages_left(uint8_t *obj)
 {
+    if (master_left(obj))                                      /* Tools screen: Compressor / settings pages */
+        return 1;
     if (ST->magic != PMAGIC)
         return 0;
     if (obj[SCREEN_ID] == 2) {

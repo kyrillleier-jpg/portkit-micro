@@ -16,20 +16,21 @@ bitbox micro, Firmware 2.3.4. Keine Firmware in diesem Repo: Der Patcher arbeite
 | Smooth Time-Stretch (WSOLA, Tonhoehe bleibt), Stretch Mode Auto/Jump/Smooth | pkR am Geraet: funktioniert |
 | Audio-Last rechts in der Kopfzeile | pkS: korrigiert, nicht am Geraet |
 | Reverb-Typen Plate / Room / Hall / Chamber mit 10 Reglern + Level, Pegel aufs Plate abgeglichen (`patches/reverb.py`) | pkT am Geraet: funktioniert; pkV: Pegel, nicht am Geraet |
-| FX3: dritter Send (Bus 0xC) mit zweitem Reverb; Effects: Linkspfeil = Seiten, zweites Tippen auf RVB = RVB/FX3 (`patches/fx3.py`) | pkU: durch Emulation bestaetigt, nicht am Geraet |
+| FX3: dritter Send (Bus 0xC) mit zweitem Reverb; Effects: Linkspfeil = Seiten, zweites Tippen auf RVB = RVB/FX3; Rechtspfeil = FX3-Regler, nochmal = Master-EQ (`patches/fx3.py`) | pkU am Geraet: laeuft (Hall leise → pkV); pkW: FX3 auf Zeile 3 statt EQ, nicht am Geraet |
+| Master-Sektion: Tools-Seite Linkspfeil = Kompressor (Threshold, Ratio, Attack, Release, Gain; stock Kompressor), Rechtspfeil = Master-Distortion (Soft / Hard / Fold / Tube, Drive, Tone, Mix, Level; 2x Oversampling) (`patches/master.py`) | pkX: durch Emulation bestaetigt, nicht am Geraet |
 | Sync-Raster 1/32 (Clips); Play Len / Stretch ausgeblendet, wenn Quant Size / Sync sie unwirksam machen | pkK: durch Emulation bestaetigt, nicht am Geraet |
 | Machine-Drive (Saturation als Wandler-Eingang) | nicht portiert (Micro hat keinen Saturation-Parameter) |
 | Fidelity auch auf der Pad-Seite von Clip, Slicer, Granular (`patches/pages.py`) | durch Emulation bestaetigt, nicht am Geraet |
 | Pads 9-16 als zweite Seite des Pad-Rasters (`patches/padpages.py`), Umschalten nur per Button: Pads = Linkspfeil, Mixer = Feld oben links, Effects = erneuter Druck auf die gewaehlte Zelle DLY/RVB, Pad-Waehler = Linkspfeil (Pad-Namen 5 Zeichen, folgt der Seite des markierten Pads); Encoder waehlt innerhalb der Seite | pkB am Geraet: Seiten und Waehler gehen; pkE: Encoder auf Seite 2 (Encoder-Listen des Pads-Bildschirms), nicht am Geraet |
 
-Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkV`.
+Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkX`.
 
 ## Bauen
 
 ```sh
 ./setup.sh                                  # Repos, venv, Hash-Check; firmware/MICRO.BIN muss 2.3.4 sein
 ./build.sh                                  # src/ -> out/cave.elf, out/cave.bin
-.venv/bin/python -I patch.py fidelity pages padpages sound reverb fx3 cave  # -> out/fidelity+pages+padpages+sound+reverb+fx3+cave/MICRO.BIN
+.venv/bin/python -I patch.py fidelity pages padpages sound reverb fx3 master cave  # -> out/fidelity+pages+padpages+sound+reverb+fx3+master+cave/MICRO.BIN
 .venv/bin/python -I tests/test_fidelity.py  # Unicorn-Tests auf dem gepatchten Image
 .venv/bin/python -I tests/test_padpages.py
 .venv/bin/python -I tests/test_reverb.py

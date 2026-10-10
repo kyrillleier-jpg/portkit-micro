@@ -108,6 +108,8 @@ typedef void (*register_knob_fn)(void *table, int param, int type, const char *l
                                  const char *xml);
 #define fw_register_knob ((register_knob_fn)FN(0x08069ed4))  /* type 8: 0..max, type 9: bipolar (Filter 0xaa) */
 
+void master_register(void *table);
+
 void interp_register(void *table, int param, const char *label, const char *const *names, int count, const char *xml)
 {
     (void)label;
@@ -123,6 +125,7 @@ void interp_register(void *table, int param, const char *label, const char *cons
     fw_register_knob(table, P_STRETCH, 1, "Stretch %:", -100, 100, "pkstretch");
     fw_register_list(table, P_SMODE, "Str Mode:", smode_names, 3, "pkstretchmode");
     fw_register_knob(table, P_FX3SEND, 8, "FX3 Send:", 0, 1000, "fx3send");
+    master_register(table);                                                   /* master.c: compressor, distortion */
 }
 
 /* Pad record init (0x08089548): its two pad blocks add Filter (0xaa) through 0x0808951e (0x080896f8, 0x08089922);

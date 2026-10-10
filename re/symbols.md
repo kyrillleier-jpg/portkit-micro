@@ -660,3 +660,66 @@ Pad-Ausgang). Messung (Rauschen, Decay 40 / 70 %, stationaerer RMS gegen das Pla
 pkV: Ausgleich TANK_GAIN 1,45, ROOM_GAIN 2,8 (alle Typen jetzt ±0,2 dB zum Plate, Test); neuer Regler 0x19B "Level:"
 (−12 … +12 dB, 500 = 0 dB, xml `rvblevel`) fuer alle Typen inkl. Plate (nach dem Kern skaliert), bei Plate sichtbar;
 gilt fuer RVB und FX3. Records jetzt 15 Eintraege.
+
+## FX3 auf FX-Zeile 3, Rechtspfeil (Build pkW)
+
+Fehler bis pkV: FX3 lag auf Zelle 0x320 / Record app+0x2230 = **Master-EQ** (Typ 0x36, Init 0x0807ACB2 ff.); FX3 las
+Decay usw. aus dem EQ-Record, der Rechtspfeil zeigte die EQ-Seite.
+
+| Adresse | Was | Beleg | Status |
+|---|---|---|---|
+| app+0x2200 + Zeile·0x18 | FX-Records: 0 Delay (0x26), 1 Reverb (0x44), 2 Master-EQ (0x36), 3 leer (Typ 0) | Init-Folgen 0x0807AC8E.. | vermutet |
+| 0x08078180, 0x0807ACC4, 0x0807ACEA, 0x0807C3DE, 0x08080F74, 0x0808AE36, 0x0808B2BE, 0x0808E2F0 | `movs r3,#0` = Typbyte fuer die Init (0x08089FC4) von Zeile 3 (app+0x2248 bzw. +0x1840+0xA08); einzige Nutzer von Zeile 3 | Suche nach 0x2248 / 0xA08 | vermutet |
+| 0x08083800 | Rechtspfeil-Tabelle (Ereignis 0xC, `ldr pc` Wortetabelle, Index Bildschirm−2): 0x30 → 0x08083952 (Bildschirm 0x23), 0x23 → 0x0808395E (Bildschirm 0x14) | Disassembly | vermutet |
+| 0x0808EEDC | Bildschirm zeigen (app, id, a, b); 0x23: Nachricht 0xB6 mit app+0x28 (FX-Zellen-Seite), 0x14: Nachricht 0xB2 mit app+0x28 (Inhalt nicht bestimmt) | tbh-Fall 0x0808F392 / 0x0808F1D6 | vermutet |
+| 0x0807B20C | Zelle waehlen (app, msg): app+0x28 = msg+4, Nachricht 0x112 ueber app+0x2C; synchron | Disassembly | vermutet |
+| 0x08076ED4 | Seitenaufbau FX-Zelle: Zeile = (id>>4)&0xF, ≤ 4, Record app+0x2200+Zeile·0x18 | Disassembly | vermutet |
+| 0x0807D846 | FX-Regler: Store-Set im Zeilen-Record, dann Engine-Nachricht 0x39 an Adresse Ebene/Zeile/Spalte | Disassembly | vermutet |
+| 0x08095440 | Engine: Nachricht 0x39 sucht den Knoten per Adresse in der Liste, ohne Treffer Ruecksprung → 0x330 (kein Knoten) wird verworfen | Disassembly | vermutet |
+| 0x08095CE8 | Graph-Aufbau fest (Reverb-Knoten per Literal), nicht aus den Records → Zeile 3 Typ 0x44 erzeugt keinen Knoten | Disassembly | vermutet |
+
+pkW: die acht Typbytes → 0x44 (Zeile 3 ist ueberall ein Reverb-Record; `fx3_record_ensure` bleibt Rueckfall), FX3 =
+Zelle 0x330 / app+0x2248. Rechtspfeil auf dem Effects-Bildschirm mit gewaehltem FX3 → Stock-Seite 0x23 fuer 0x330
+(FX3-Regler). Hook `fx3_right` am BL 0x08083964: auf Seite 0x23 mit app+0x28 = 0x330 → 0x0807B20C(0x320) + Seite 0x23
+(Master-EQ), sonst Stock (0x14). Folge: von FX3 aus ist Seite 0x14 nicht erreichbar; nach dem EQ ist die Auswahl 0x320
+(keine Kachel markiert, Rechtspfeil auf Effects fuehrt dann direkt zum EQ). Titel der Seite 0x23 fuer 0x330 nicht
+verifiziert. Alte Presets: Zeile 3 bekommt beim Laden die Reverb-Defaults (vermutet; ein Preset mit Zeile-3-Typ 0 nicht
+geprueft). Test: test_fx3.py (Typbytes im Image, fx3_right beide Faelle), test_padpages.py (0x330).
+
+## Master-Sektion: Kompressor- und Distortion-Seite (Build pkX)
+
+Wunsch: Tools, Linkspfeil = Kompressor-Seite (Threshold, Attack, Release, Gain), Rechtspfeil = Master-Distortion.
+
+| Adresse | Was | Beleg | Status |
+|---|---|---|---|
+| 0x080839BC | Tools-Taste: Bildschirm 0x25 → 0x33 → 0x32 → 0x25 (von anderen: 0x25) | Disassembly | vermutet |
+| 0x0808F3D4 | Bildschirm 0x25 = Settings-Seite: Nachricht 0xB6, Seitencode 0x40 | tbh-Fall | vermutet |
+| 0x08076D8C | Seitenbauer: Codes 0x40 / 0x41 / 0x42 aus Tabellen (0x080C6E6C: 0x61, 0x62, 0x9C, 0x96, 0x7F, 0xC2, 0x59, 0x5A, 0xC3, 0xB5, 0x17B), Werte aus app+0x7FD0 | Disassembly | vermutet |
+| app+0x7FD0 | Settings-Store (globale Werte, u. a. 0x96 `globcomp`), Init 0x08089E04: Kapazitaet 64, 36 Eintraege, letzter Add 0x17B an 0x08089F78; Init-Aufrufer 0x0807856A, 0x0808B39C, 0x0808B3A4 | Disassembly, Unicorn (echte Init) | durch Emulation bestaetigt |
+| 0x0807D3A6 | Regler-Handler: Code 0x40 (bzw. 0x140) → Store-Set in app+0x7FD0 mit der ID | Disassembly | vermutet |
+| 0x08083800 | Rechtspfeil-Tabelle: Eintrag Bildschirm 0x25 = 0x080837E9 (nichts) | Wortetabelle | vermutet |
+| 0x080839FC | Linkspfeil-Tabelle (Index Bildschirm−4): 0x25 / 0x32 / 0x33 = nichts | Wortetabelle | vermutet |
+| 0x0805EACC | Wert-Formatierer (Typ +0x31): 7 = ±x.x dB (Wert in 1/1000 dB), 8/9 = %, 10 = Frequenz ueber 0x080A01BC, 11 = Q, 1 = Ganzzahl; 14/15/16 (tote Kompressor-Regler 0x10F..0x113) nicht sinnvoll | Disassembly, Typen per Emulation der Registrierung 0x08069F00 | vermutet |
+| 0x10F..0x11B | Stock-Kompressor-Regler (C Attack, C Release, C Thresh, C Ratio, ...) registriert, aber in keinem Record → auf der Micro tot | Registrierung emuliert, keine Store-Adds | vermutet |
+| 0x08096D1A | Block-Treiber: nach FX-Ruecklaeufen (0x08096D04) und Objekt vt+0xC (vermutlich Master-EQ): Flag engine+0x28CC0 → Kompressor | Disassembly | vermutet |
+| 0x08097056 | Kompressor `0x080B9B04(engine+0xFB38, engine)`; Objekt: +0x428 Thresh dB, +0x42C Ratio, +0x430 Makeup dB (Float), +0x448 Attack, +0x44C Release (Samples, Rampenlaengen des Gain-Glaetters +0x434); Ctor 0x080B9D88: −4 dB, 4:1, −4 dB, 480, 12000 | Disassembly; deckt sich mit bitbox-micro-fw-patch (Guards gleich) | vermutet |
+
+Umsetzung (`src/master.c`, `src/master_thunk.S`, `patches/master.py`):
+- Neue IDs (in keinem Stock-Befehl als Konstante, Test): Kompressor 0x1A1 "Threshold:" (Typ 7, −48..0 dB, Default −4),
+  0x1A2 "Ratio:" (Typ 1, 1..20, 4), 0x1A3 "Attack ms:" (Typ 1, 1..200, 10), 0x1A5 "Release ms:" (Typ 1, 10..2000, 250),
+  0x1A6 "Gain:" (Typ 7, −12..+24 dB, −4); Distortion 0x1A7 "Dist Type:" (Liste Off/Soft/Hard/Fold/Tube, Off),
+  0x1A8 "Drive:" (Typ 7, 0..36 dB, 12), 0x1A9 "Tone:" (Typ 10, 1000 = offen), 0x1AB "Mix:" (Typ 8, 100 %), 0x1AC "Level:"
+  (Typ 7, −24..+12 dB, 0). xml `pkc*` / `pkd*`. Registriert aus interp_register, Store-Eintraege per Hook 0x08089F78
+  (46 von 64). Defaults = Stock-Kompressor, also klanglich unveraendert bis man dreht.
+- Kompressor: Hook 0x08097056 schreibt die Werte jeden Block ins Objekt, dann Stock-DSP. Ein/Aus bleibt `Compressor:`
+  (0x96, auch auf der Kompressor-Seite).
+- Distortion: Thunk 0x08096D1C (`ldrb.w r3,[sl,r3]`, Bus 0 = r4), laeuft auch bei Kompressor aus. 2x Oversampling mit
+  31-Tap-Halbband (Kaiser 7), Latenz 15 Samples (Dry gleich verzoegert), Tube mit DC-Blocker ~8 Hz, Tone = Einpol-
+  Tiefpass ueber die Stock-Cutoff-Kurve, Drive / Mix / Level pro Sample gerampt. Zustand 0x2406D410 (360 Byte).
+- Seiten: Zustand 0x2406D400 (Magic, Seite). Linkspfeil (padpages_left → master_left) und Rechtspfeil (Tabelle,
+  tools_right) auf Bildschirm 0x25: Settings ↔ Kompressor / Distortion, dann 0x0808EEDC(app, 0x25) neu (vorheriger
+  Bildschirm app+0x7FE5 wiederhergestellt). clip_page fragt master_page zuerst: bei Code 0x40 und Master-Seite wird die
+  Liste ersetzt. Tools-Taste (Thunk 0x080839BC) setzt auf Settings zurueck.
+- Offen / nicht verifiziert: Kopfzeile der Seite (bleibt die der Settings-Seite), ob der Settings-Store mit dem Preset
+  oder global gespeichert wird, Encoder-Schrittweite bei Release (Typ 1, 1 ms pro Raste), Pfeile auf 0x32 / 0x33 nicht
+  belegt. Test: tests/test_master.py (21 Checks), test_fidelity.py (Registrierung, ID-Scan).

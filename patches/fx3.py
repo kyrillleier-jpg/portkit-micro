@@ -11,7 +11,12 @@ HOOKS = [
     (0x080B2600, 0x080A3328, "fx3_mix_a"),      # sample pads: final mix scratch -> output, first scratch -> bus 0xc
     (0x080B8046, 0x080A3328, "fx3_mix_b"),      # clip pads
     (0x08096D04, 0x080A3328, "fx3_master"),     # block driver: bus 0 += bus 0xe, then += FX3(bus 0xc)
+    (0x08083964, 0x0808EEDC, "fx3_right"),      # right arrow on the FX cell page (0x23 -> 0x14); from FX3: master EQ
 ]
+
+# FX cell record row 3 (app +0x2248, cell 0x330): the eight stock inits (boot, new / loaded preset) make it an empty
+# type-0 record; `movs r3, #0` before each (type byte for 0x08089fc4) -> `movs r3, #0x44` (reverb) for FX3
+ROW3_TYPE = [0x08078180, 0x0807ACC4, 0x0807ACEA, 0x0807C3DE, 0x08080F74, 0x0808AE36, 0x0808B2BE, 0x0808E2F0]
 
 THUNKS = [
     (0x080B13E0, "d6ed007a", "fx3_check_a"),    # vldr s15, [r6]: sample pads' "any send on"
@@ -26,4 +31,5 @@ THUNKS = [
 PATCHES = (
     [(at, bl(at, stock), bl(at, sym[name])) for at, stock, name in HOOKS]
     + [(at, bytes.fromhex(old), bl(at, sym[name])) for at, old, name in THUNKS]
+    + [(at, bytes.fromhex("0023"), bytes.fromhex("4423")) for at in ROW3_TYPE]
 )

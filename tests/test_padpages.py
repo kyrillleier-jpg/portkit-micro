@@ -1,10 +1,10 @@
-"""Unicorn tests for patches/padpages.py on the patched image (out/fidelity+pages+padpages+sound+reverb+fx3+cave/MICRO.BIN).
+"""Unicorn tests for patches/padpages.py on the patched image (out/fidelity+pages+padpages+sound+reverb+fx3+master+cave/MICRO.BIN).
 
 Runs: the row thunks on their own (result, flags and registers preserved), the stock function bodies with the thunks in
 place (which tile they address on page 0 / 1), the page-aware guards, the constructor wrappers (stock constructors
 stubbed), and the page switch / encoder logic of the Pads screen with recorded calls. Drawing is not emulated.
 
-  python3 -I tests/test_padpages.py      (after ./build.sh and patch.py fidelity pages padpages sound reverb fx3 cave)
+  python3 -I tests/test_padpages.py      (after ./build.sh and patch.py fidelity pages padpages sound reverb fx3 master cave)
 """
 import os
 import struct
@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "patches"))
 from thumb import BASE, bl_target, symbols  # noqa: E402
 
-IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+reverb+fx3+cave", "MICRO.BIN"), "rb").read()
+IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+reverb+fx3+master+cave", "MICRO.BIN"), "rb").read()
 SYM = symbols(os.path.join(ROOT, "out", "cave.elf"))
 RET, STACK = 0x24000000, 0x2407F000
 PSTATE = 0x2406C110
@@ -377,13 +377,13 @@ check("Effects: second touch on DLY goes to the stock handler (no page switch an
 e.w16(APPX + 0x28, 0x310)                 # RVB selected
 del posts[:], updates[:]
 r = e.call(SYM["padpages_a_input"], A, note(3, 0x310))
-check("Effects: second touch on RVB -> FX3: cell id 0x320, label FX3, cell selected (0x111), tiles and sends refreshed",
-      r == 0 and e.r16(A + 0xED4 + 0x38) == 0x320 and labels[-1:] == ["FX3"] and posts == [(0x111, 0x320, 0x080BEE0C)]
+check("Effects: second touch on RVB -> FX3: cell id 0x330, label FX3, cell selected (0x111), tiles and sends refreshed",
+      r == 0 and e.r16(A + 0xED4 + 0x38) == 0x330 and labels[-1:] == ["FX3"] and posts == [(0x111, 0x330, 0x080BEE0C)]
       and e.r8(PSTATE + 5) == 1 and len(updates) == 8 and touches[-1:] == [0x12],
       (r, hex(e.r16(A + 0xED4 + 0x38)), labels, posts, len(updates), touches))
-e.w16(APPX + 0x28, 0x320)
+e.w16(APPX + 0x28, 0x330)
 del posts[:]
-r = e.call(SYM["padpages_a_input"], A, note(3, 0x320))
+r = e.call(SYM["padpages_a_input"], A, note(3, 0x330))
 check("Effects: second touch on FX3 -> back to RVB (0x310)", r == 0 and e.r16(A + 0xED4 + 0x38) == 0x310
       and labels[-1:] == ["RVB"] and posts == [(0x111, 0x310, 0x080BEE0C)] and e.r8(PSTATE + 5) == 0)
 p4 = page()

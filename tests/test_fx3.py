@@ -18,7 +18,7 @@ from unicorn.arm_const import UC_ARM_REG_R4, UC_ARM_REG_R9, UC_ARM_REG_S15  # no
 e = Emu()
 e.stub(0x08042DFC, lambda uc: uc.reg_write(UC_ARM_REG_R0, e.new(uc.reg_read(UC_ARM_REG_R0))))   # DTCM allocator
 APP = 0x24013CB0
-REC = APP + 0x2200 + 2 * 0x18
+REC = APP + 0x2200 + 3 * 0x18
 F3 = 0x2406D200
 N = 32
 
@@ -40,7 +40,7 @@ check("fx3_init with 2 MB free: no memory taken, FX3 off; the FX3 record is made
 cnt = struct.unpack("<H", e.mu.mem_read(REC + 0xA, 2))[0]
 ent = e.r32(REC + 4)
 ids = [struct.unpack("<H", e.mu.mem_read(ent + 8 * k, 2))[0] for k in range(cnt)]
-check("FX3 record (FX row 2): a reverb record (Type, Decay, Predelay, Damping, 11 settings)",
+check("FX3 record (FX row 3, app +0x2248): a reverb record (Type, Decay, Predelay, Damping, 11 settings)",
       ids == [0x178, 0x1A, 0x1E, 0x1D] + list(range(0x191, 0x19C)), ids)
 e.stub(0x08042E44, lambda uc: uc.reg_write(UC_ARM_REG_R0, 32 * 1024 * 1024))
 e.call(SYM["fx3_init"])
@@ -133,6 +133,27 @@ for name, t in (("Plate", 0), ("Hall", 2)):
 e.w32(F3 + 0x30, 10 ** 6)
 L, R = run_fx3(4, impulse=False)
 check("FX3 idle after its run-on: bus 0 left alone (stays silent)", all(v == 0.0 for v in L + R))
+
+# --- row 3 is a reverb record in the image: the eight stock inits' type byte (movs r3, #0 -> #0x44)
+sites = [0x08078180, 0x0807ACC4, 0x0807ACEA, 0x0807C3DE, 0x08080F74, 0x0808AE36, 0x0808B2BE, 0x0808E2F0]
+check("FX row 3 (app +0x2248) inits: type 0x44 at all eight sites",
+      all(IMG[a - 0x08040000: a - 0x08040000 + 2] == bytes.fromhex("4423") for a in sites))
+
+# --- right arrow on the FX cell page (screen 0x23): FX3 -> master EQ (cell 0x320, page 0x23); else stock (0x14)
+from unicorn.arm_const import UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3  # noqa: E402
+calls = []
+def _screen(uc):
+    calls.append(("screen", uc.reg_read(UC_ARM_REG_R0), uc.reg_read(UC_ARM_REG_R1), uc.reg_read(UC_ARM_REG_R2),
+                  uc.reg_read(UC_ARM_REG_R3)))
+e.stub(0x0808EEDC, _screen)
+e.stub(0x0805B18C, lambda uc: calls.append(("notify", struct.unpack("<H", uc.mem_read(uc.reg_read(UC_ARM_REG_R1), 2))[0])))
+e.mu.mem_write(APP + 0x28, struct.pack("<H", 0x330))
+e.call(SYM["fx3_right"], APP, 0x14, 0, 0)
+check("right arrow on FX3's page: EQ cell selected (app +0x28 = 0x320, notification 0x112), FX cell page 0x23",
+      e.r16(APP + 0x28) == 0x320 and calls == [("notify", 0x112), ("screen", APP, 0x23, 0, 0)], calls)
+calls.clear()
+e.call(SYM["fx3_right"], APP, 0x14, 0, 0)
+check("right arrow on the EQ's / RVB's page: stock (screen 0x14)", calls == [("screen", APP, 0x14, 0, 0)], calls)
 
 print(f"\n{'FAILED: ' + str(failures) if failures else 'all passed'}")
 sys.exit(1 if failures else 0)

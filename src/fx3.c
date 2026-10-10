@@ -12,8 +12,11 @@
  * - Effect: the engine's block driver 0x08096530 mixes bus 0xe into bus 0 (Out1/2) at 0x08096d04; right after that,
  *   bus 0xc runs through FX3 and is added to bus 0 as well. No graph node: the reverb runs here, at 29.8 kHz like the
  *   stock reverb (decimated 48 -> 29.8 kHz with a two-pole low-pass, interpolated back), with a pre-delay of its own.
- * - Settings: FX cell record row 2 (app +0x2200 + 2 x 0x18, a reverb record, type 0x44, made on first use), edited on
- *   the Effects screen's third cell (src/padpages.c); Decay / Damping / Predelay / Type / the ten reverb settings.
+ * - Settings: FX cell record row 3 (cell 0x330, app +0x2200 + 3 x 0x18), unused by the stock firmware (its eight init
+ *   sites make it an empty type-0 record; patches/fx3.py makes them type 0x44 = reverb, fx3_record_ensure is the
+ *   fallback). Row 2 (0x320) is the master EQ (type 0x36). The record is edited on the stock FX cell page (screen 0x23,
+ *   right arrow on the Effects screen with FX3 selected); engine messages for 0x330 find no node and are dropped
+ *   (0x08095440). Right arrow again: the master EQ (fx3_right).
  * - Memory: a plate state (0xb0 + its 12 buffers, ~210 KB, the stock init 0x080a9c94) and a pre-delay ring, from the
  *   firmware's heap (0x08042dc0, a bump allocator without free) when the Effects screen is built at boot, and only if
  *   more than 4 MB stay free (0x08042e44); otherwise FX3 stays silent.
@@ -33,6 +36,8 @@ typedef void *(*alloc_fn)(unsigned size, unsigned n);
 typedef unsigned (*free_fn)(void);
 typedef void (*init_fn)(float *state);
 typedef float (*curve_fn)(float x);
+typedef void (*screen_fn)(void *app, unsigned screen, unsigned a, unsigned b);
+typedef void (*cell_fn)(void *app, const void *msg);
 typedef int (*store_get_fn)(const void *store, unsigned param);
 typedef void (*store_init_fn)(void *store, const uint8_t *type);
 #define fw_bus        ((bus_fn)FN(0x080a82b8))
@@ -46,6 +51,8 @@ typedef void (*store_init_fn)(void *store, const uint8_t *type);
 #define fw_send_curve ((curve_fn)FN(0x080a04c0))      /* send value / 1000 -> gain (the stock send setters) */
 #define fw_store_get  ((store_get_fn)FN(0x080894d0))
 #define fw_store_init ((store_init_fn)FN(0x08089fc4))
+#define fw_screen     ((screen_fn)FN(0x0808eedc))     /* app: show screen (0x23 = FX cell page of app +0x28) */
+#define fw_set_cell   ((cell_fn)FN(0x0807b20c))       /* app command 0x111: app +0x28 = msg +4, notification 0x112 */
 
 unsigned pad_setting(const uint8_t *pad, unsigned param);                                   /* filter.c */
 void reverb_run_record(float *state, const void *rec, const float *in, float *outl, float *outr, int n);  /* reverb.c */
@@ -54,7 +61,11 @@ void reverb_run_record(float *state, const void *rec, const float *in, float *ou
 #define BUS_FX3   0xc
 #define BUS_FX2   0xe
 #define BUS_SIZE  20
-#define FX3_REC   ((void *)(0x24013cb0u + 0x2200u + 2u * 0x18u))
+#define APP       ((uint8_t *)0x24013cb0u)
+#define FX3_REC   ((void *)(APP + 0x2200u + 3u * 0x18u))
+#define CELL_EQ   0x320
+#define CELL_FX3  0x330
+#define SCR_FXCELL 0x23
 #define REC_COUNT 0xa                                   /* store: entry count (u16) */
 #define P_DECAY   0x1a
 #define P_DAMP    0x1d
@@ -112,6 +123,20 @@ void fx3_init(void)
     F3->idle = RUN_ON;
     F3->plate = st;
     F3->magic = F3MAGIC;
+}
+
+/* right arrow on the FX cell page (screen 0x23): stock goes on to screen 0x14 (call 0x08083964, hooked). From FX3 it
+   opens the master EQ's page instead: select cell 0x320 as a touch does, then the FX cell page again. */
+void fx3_right(uint8_t *app, unsigned screen, unsigned a, unsigned b)
+{
+    if (*(volatile uint16_t *)(app + 0x28) == CELL_FX3) {
+        uint16_t m[12] = {0};
+        m[2] = CELL_EQ;
+        fw_set_cell(app, m);
+        fw_screen(app, SCR_FXCELL, 0, 0);
+        return;
+    }
+    fw_screen(app, screen, a, b);
 }
 
 /* --- pad sends ------------------------------------------------------------------------------------------------------ */
