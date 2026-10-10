@@ -15,6 +15,19 @@ STORE_ADD = 0x0808951E
 HOOKS = [
     (0x080896F8, STORE_ADD, "pad_store_add"),
     (0x08089922, STORE_ADD, "pad_store_add"),
+    # stretch: the clip setup 0x080b40fc hands the clip's length in ticks (Auto / Beat Count) to the tempo conversion
+    (0x080B42A8, 0x0809F1F8, "clip_ticks_thunk"),
+    (0x080B44DA, 0x0809F1F8, "clip_ticks_thunk"),
+    # Sync list + "1/32"
+    (0x0806AB7E, 0x08069E7C, "sync_register"),
+    # parameter pages: hide Play Len / Stretch when the clip is not synced (every caller of the page builder)
+    (0x08085312, 0x08076D8C, "clip_page"),
+    (0x0808542C, 0x08076D8C, "clip_page"),
+    (0x08087D82, 0x08076D8C, "clip_page"),
+    (0x08087DE8, 0x08076D8C, "clip_page"),
+    (0x08088110, 0x08076D8C, "clip_page"),
+    (0x0808814A, 0x08076D8C, "clip_page"),
+    (0x080910DE, 0x08076D8C, "clip_page"),
     # clip reader 0x080b55ac and segment starts 0x080b4644 / 0x080b490c: the stream calls get the pad (r4) and shift
     (0x080B5630, 0x080A4500, "clip_read1_thunk"),
     (0x080B5720, 0x080A4500, "clip_read1_thunk"),
@@ -35,10 +48,12 @@ NEW = [P_FILT2, P_RES2, P_DRIVE]
 THUNKS = [
     (0x080B5F2E, "d6e99012", "clip_segments_thunk"),
     (0x080B611A, "d6e99012", "clip_segments_thunk"),
-    # stretch: the beat count (and the Auto estimate) the clip setup 0x080b40fc turns into the clip's length in ticks
-    (0x080B42AC, "daf8803b", "clip_beatcount_thunk"),
-    (0x080B4258, "07ee902a", "clip_autobeats_thunk"),
 ]
+
+EXCLUSIVE = {0x08076D8C}
+
+# Sync's beats table (0x080c4f7c, 7 entries) -> sync_beats (8) in the clip parameter handler's literal
+DATA = [(0x080B74E4, 0x080C4F7C, "sync_beats")]
 
 # Clip loop page (page 2): Loop Mode, Beat Count, Quant Size, Sync -> + Shift, Play Len, Stretch
 CLIP_TABLES = [0x080C6A1C, 0x080C6C38]
@@ -49,6 +64,7 @@ PATCHES = (
     [(at, bl(at, stock), bl(at, sym[name])) for at, stock, name in HOOKS]
     + [(t, struct.pack("<8H", *MAIN, 0, 0, 0), struct.pack("<8H", *MAIN, *NEW)) for t in MAIN_PAGES]
     + [(at, bytes.fromhex(old), bl(at, sym[name])) for at, old, name in THUNKS]
+    + [(at, struct.pack("<I", old), struct.pack("<I", sym[name])) for at, old, name in DATA]
     + [(t + LOOP_PAGE, struct.pack("<7H", *LOOP, 0, 0, 0),
        struct.pack("<7H", *LOOP, P_SHIFT, P_PLAYLEN, P_STRETCH)) for t in CLIP_TABLES]
 )

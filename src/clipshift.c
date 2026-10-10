@@ -19,11 +19,13 @@
  * beat, 4/4). Sync None or Slice: no cap.
  *
  * Stretch for clip pads: -100 .. +100 %, speed x 1 / (1 + |p| / 100) below 0 and x (1 + p / 100) above (so -100 %
- * is half, +100 % double speed). The clip's tempo comes from its beat count: the clip setup 0x080b40fc turns Beat
- * Count (pad +0xb80, set from 0xb4; 0 = Auto) or, on Auto, its power-of-two estimate (r2 at 0x080b4258) into the
- * clip's length in ticks (beats x 960). Both become round(beats / speed), at least 1: the stretch is quantized to whole
- * beats, as with Beat Count itself. The setup runs at every trigger and loop start (0x080b5f5a), so a change applies
- * from the next loop.
+ * is half, +100 % double speed). Clips play their file at its own rate and keep time by restarting each Sync unit at the
+ * file position of the current beat (re/symbols.md "Stretch"); the clip's length in beats sets that mapping, so fewer
+ * beats = faster, pitch unchanged, the same way the stock firmware follows the song tempo. The clip setup 0x080b40fc
+ * takes the length in ticks (beats x 960; Beat Count or, on Auto, the rounded estimate) to 0x0809f1f8 at 0x080b42a8
+ * (Auto) / 0x080b44da (Beat Count); there it becomes round(beats / speed) beats, at least 1, quantized to whole beats.
+ * The setup runs at every trigger and loop start (0x080b5f5a), so a change applies from the next loop. Needs Sync on;
+ * smaller Sync units chop finer.
  */
 #include <stdint.h>
 
@@ -42,7 +44,6 @@ typedef int (*frames_fn)(void *stream);
 #define P_PLAYLEN      0x1c4      /* list index: 0 = Full, q = q quarter bars (1 .. 128) */
 #define PAD_SEGMENTS   0x240      /* + 0x244: segment count */
 #define P_STRETCH      0x1c5      /* -100 .. 100 % */
-#define PAD_BEATCOUNT  0xb80
 #define PAD_SYNCED     0x1f5
 #define PAD_UNIT_TICKS 0x220      /* int64 */
 #define TICKS_PER_BEAT 960
@@ -185,14 +186,77 @@ static int stretched(const uint8_t *pad, int beats)
     return b < 1 ? 1 : b > 512 ? 512 : b;
 }
 
-/* thunks: 0x080b42ac `ldr.w r3, [sl, #0xb80]` and 0x080b4258 `vmov s15, r2` (Auto estimate), pad in sl */
-int clip_beatcount(const uint8_t *pad)
+/* thunk (clip_ticks_thunk), before 0x0809f1f8(out, &ticks, tempo, ..) in the clip setup; pad in sl */
+void clip_ticks(const uint8_t *pad, int64_t *ticks)
 {
-    int beats = *(const int32_t *)(pad + PAD_BEATCOUNT);
-    return beats ? stretched(pad, beats) : 0;
+    int64_t t = *ticks;
+    if (t <= 0 || t > (int64_t)512 * TICKS_PER_BEAT * 4)
+        return;
+    int beats = ((int)t + TICKS_PER_BEAT / 2) / TICKS_PER_BEAT;   /* t fits 32 bits (checked above) */
+    int b = stretched(pad, beats);
+    if (b != beats)
+        *ticks = (int64_t)b * TICKS_PER_BEAT;
 }
 
-int clip_autobeats(const uint8_t *pad, int beats)
+/* --- Sync 1/32 ------------------------------------------------------------------------------------------------------ */
+/* Sync (0x76) list: the stock 7 entries (pointers into the stock strings, list at 0x080c4770) + "1/32", appended so the
+   stored indexes of old presets keep their meaning (6 = None). Its beats table (0x080c4f7c, read only by the clip param
+   handler at 0x080b7386 through the literal 0x080b74e4, x 960 ticks) gets the same eighth entry: 1/32 = 0.125 beat,
+   120 ticks. The preset reader's legacy conversion (0x080807b6) keeps searching the stock 7. */
+typedef void (*register_list_fn)(void *table, int param, const char *label, const char *const *names, int count,
+                                 const char *xml);
+#define fw_register_list ((register_list_fn)FN(0x08069e7c))
+
+const char *const sync_names[8] = {
+    (const char *)0x080c3488u, (const char *)0x080c33acu, (const char *)0x080c33b4u, (const char *)0x080c33b8u,
+    (const char *)0x080c33bcu, (const char *)0x080c33c0u, (const char *)0x080c21ccu, "1/32",
+};
+const float sync_beats[8] = {1024.0f, 4.0f, 2.0f, 1.0f, 0.5f, 0.25f, 0.0f, 0.125f};
+
+void sync_register(void *table, int param, const char *label, const char *const *names, int count, const char *xml)
 {
-    return stretched(pad, beats);
+    (void)names;
+    (void)count;
+    fw_register_list(table, param, label, sync_names, 8, xml);
+}
+
+/* --- hide Play Len / Stretch where they do nothing ------------------------------------------------------------------- */
+/* Both need the clip synced: Quant Size (0x2a) not None (8) and Sync (0x76) neither Slice (0) nor None (6) (pad +0x1f5,
+   0x080b6fd4). The page builder 0x08076d8c(app, msg, list, ..) fills a parameter page; the stock hides entries the same
+   way (0x080836c8, Delay vs. Beat Sync at 0x08076f48). */
+typedef int (*page_fn)(void *app, const void *msg, void *list, int arg);
+typedef void *(*record_fn)(void *app, const void *msg);
+typedef void (*list_remove_fn)(void *list, unsigned param);
+typedef int (*store_get_fn)(const void *store, unsigned param);
+#define fw_page        ((page_fn)FN(0x08076d8c))
+#define fw_record      ((record_fn)FN(0x08076d54))
+#define fw_list_remove ((list_remove_fn)FN(0x080836c8))
+#define fw_store_get   ((store_get_fn)FN(0x080894d0))
+#define P_QUANT        0x2a
+#define P_SYNC         0x76
+#define QUANT_NONE     8
+#define SYNC_SLICE     0
+#define SYNC_NONE      6
+
+static int list_has(const uint8_t *list, unsigned param)
+{
+    unsigned n = *(const uint32_t *)list;
+    for (unsigned i = 0; i < n && i < 0x30; i++)
+        if (*(const uint16_t *)(list + 4 + 12 * i) == param)
+            return 1;
+    return 0;
+}
+
+int clip_page(void *app, const void *msg, void *list, int arg)
+{
+    int r = fw_page(app, msg, list, arg);
+    if (!list_has(list, P_PLAYLEN) && !list_has(list, P_STRETCH))
+        return r;
+    const void *rec = fw_record(app, msg);
+    int quant = fw_store_get(rec, P_QUANT), sync = fw_store_get(rec, P_SYNC);
+    if (quant == QUANT_NONE || sync == SYNC_SLICE || sync == SYNC_NONE) {
+        fw_list_remove(list, P_PLAYLEN);
+        fw_list_remove(list, P_STRETCH);
+    }
+    return r;
 }

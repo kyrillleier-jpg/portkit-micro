@@ -457,3 +457,47 @@ Auto bleibt Auto (nur die Schaetzung wird skaliert), Slicer unveraendert. Quanti
 Wirkt ab dem naechsten Setup (Trigger / Loop-Neustart); die Tempo-Anzeige der UI (aus Beat Count) zeigt den Stretch nicht.
 Pad-Record jetzt 64 von 64 Eintraegen (voll).
 Tests: Registrierung, Record, Loop-Seite, beide Thunks (0, ±100 %, ±50 %, Auto, Grenzen, Register erhalten).
+
+## Hardware-Test pkI, Clip-Parameter und Build pkJ (2026-10-10)
+
+pkI am Geraet: Shift gut; Play Len geht, Zusammenspiel unklar; Stretch ohne Wirkung.
+Ursache Stretch: bei Beat Count Auto skalierte der Thunk an 0x080B4258 nur das Rundungsraster (2^k Beats), die
+geschaetzte Laenge wurde danach wieder auf fast denselben Wert gerundet (0x080B447E..0x080B4472).
+pkJ: Thunks an 0x080B42AC / 0x080B4258 entfernt; stattdessen vor 0x0809F1F8(out, &Ticks, Tempo, 48000) an 0x080B42A8
+(Auto) und 0x080B44DA (Beat Count): Ticks → round(Ticks / 960) Beats → Stretch → × 960. Tests: echte Umrechnung 0x0809F1F8
+bei 120 BPM (16 Beats = 384000 Frames, +100 % = 192000).
+
+Wiedergabe-Modell Clip (vermutet, aus dem Code): Slot-Rate = Datei-Rate (Pad+0x1F0) × Tastatur-Tonhoehe (0x080B4644) ×
+Pitch (0x080B5728, 0x0809F45C); das Tempo geht nicht in die Rate ein. Mit Sync startet jedes Segment (Sync-Einheit) an
+der Datei-Position, die zum aktuellen Beat gehoert (Segment × Pad+0x1FC = Datei-Frames / Segmente); so folgt der Clip dem
+Song-Tempo ohne Tonhoehenaenderung, bei Abweichung mit Spruengen an den Segmentgrenzen. Beat Count bestimmt diese
+Zuordnung, Stretch skaliert sie.
+
+| Param | Feld | Wirkung |
+|---|---|---|
+| Loop Mode 0x6F (Aus/An) | Pad+0x1F4 | Ende: An → Segment 0, Aus → Stop |
+| Launch Mode 0x75 (Trigger/Gate/Toggle) | Pad+0x1F8 = Wert + 1 | Ende bei Trigger (1) → Stop, auch mit Loop An (0x080B5F44) |
+| Beat Count 0xB4 (Auto, 1..512) | Pad+0xB80 | Clip-Laenge in Beats → Ticks (Auto: Schaetzung aus Laenge und Tempo, gerundet) |
+| Quant Size 0x2A (8 bars .. 1/16, None) | Pad+0x218 Ticks | Start-Quantisierung; Sync aktiv nur wenn Quant ≠ None und Sync ≠ None (Pad+0x1F5, 0x080B6FD4) |
+| Sync 0x76 (Slice, 1 bar .. 1/16, None) | Pad+0x220 Ticks | Segment-Einheit (Neuausrichtung); Slice = Slicer |
+
+## Sync 1/32 und Ausblenden (Build pkK, 2026-10-10)
+
+Wunsch: Stretch / Play Len ausgrauen, wenn unwirksam; Sync-Raster 1/32.
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| 0x0806AB7E | Registrierung Sync (0x76): Liste 0x080C4770, 7 Eintraege | Slice, 1 bar, 1/2, 1/4, 1/8, 1/16, None | durch Emulation bestaetigt |
+| 0x080C4F7C | Beats je Sync-Index {1024, 4, 2, 1, 0.5, 0.25, 0} | Leser: Klasse-B-Handler 0x080B7386 (Literal 0x080B74E4), Preset-Altformat 0x080807B6 (sucht 7) | vermutet |
+| 0x08076D8C | Seitenaufbau `(app, msg, list, ..)` | 7 Aufrufer (0x08085312, 0x0808542C, 0x08087D82, 0x08087DE8, 0x08088110, 0x0808814A, 0x080910DE) | vermutet |
+| 0x080836A4 / 0x080836C8 | Liste: Eintrag anhaengen / per ID entfernen | Liste: +0 Anzahl (max 0x30), Eintrag 12 Byte, ID +4 (h), Wert +0xC; Stock blendet so aus (Delay/Beat Sync 0x08076F48) | vermutet |
+| 0x08076D54 | Pad-Record zu msg (Adresse +4) | | vermutet |
+
+Ein Ausgrauen gibt es im Seiten-Framework nicht (nicht gefunden); umgesetzt ist Ausblenden wie im Stock.
+Umsetzung: `sync_register` (Hook 0x0806AB7E) registriert 8 Eintraege: Stock-Zeiger + "1/32" am Ende (alte Preset-Indizes
+bleiben gueltig, 6 = None). `sync_beats[8]` (… 0, 0.125) per Literal 0x080B74E4 → 1/32 = 120 Ticks. `clip_page` (alle 7
+Aufrufer, EXCLUSIVE): nach dem Stock-Aufbau, wenn die Liste Play Len / Stretch enthaelt und Quant Size = None (8) oder
+Sync = Slice (0) / None (6): beide entfernen. Ob die UI die Seite beim Aendern von Sync / Quant sofort neu aufbaut, ist
+nicht geprueft (Stock-Beispiel Delay legt es nahe).
+Tests: Liste, Literal, echter Handler 0x080B6CE8 fuer alle 8 Sync-Werte (Ticks), Seite mit echtem Record und echter
+Entfernen-Funktion (synchron / 1/32 / Quant None / Sync None / Slice).

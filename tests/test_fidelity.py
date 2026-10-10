@@ -460,34 +460,33 @@ check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len,
 check("full pad record (type 3): exactly at capacity (64)", cnt3 == cap3 == 64, (cnt3, cap3))
 
 
-def beats(p_, beatcount, auto=None, sliced=0):
+def ticks(p_, beats_, sliced=0, frac=0):
+    """clip_ticks_thunk with a clip of beats_ beats (+ frac ticks) at 120 BPM: (ticks after, frames out, stock frames
+    for those ticks)"""
     pad_ = engine_pad()
-    e.w32(pad_ + 0xB80, beatcount)
     e.mu.mem_write(pad_ + 0x254, bytes([sliced]))
     set_param(0x1C5, p_)
-    if auto is None:
-        e.call(SYM["clip_beatcount_thunk"], 0x11, 0x22, 0x33, 0x44, regs=[(UC_ARM_REG_SL, pad_)])
-        r = [e.mu.reg_read(x) for x in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
-        out = r[3]
-        kept = r[:3] == [0x11, 0x22, 0x33]
-    else:
-        e.call(SYM["clip_autobeats_thunk"], 0x11, 0x22, auto, 0x44, regs=[(UC_ARM_REG_SL, pad_)])
-        r = [e.mu.reg_read(x) for x in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
-        s15 = e.mu.reg_read(UC_ARM_REG_S15)
-        out = r[2]
-        kept = r[0] == 0x11 and r[1] == 0x22 and r[3] == 0x44 and s15 == r[2]
+    t, out, ref = e.new(8), e.new(8), e.new(8)
+    e.mu.mem_write(t, struct.pack("<q", beats_ * 960 + frac))
+    e.call(SYM["clip_ticks_thunk"], out, t, 0x33, 0x44, s=(120.0, 48000.0), regs=[(UC_ARM_REG_SL, pad_)])
+    after = struct.unpack("<q", e.mu.mem_read(t, 8))[0]
+    frames = struct.unpack("<q", e.mu.mem_read(out, 8))[0]
+    e.call(0x0809F1F8, ref, t, s=(120.0, 48000.0))
     set_param(0x1C5, 0)
-    return out, kept
+    return after, frames, struct.unpack("<q", e.mu.mem_read(ref, 8))[0]
 
 
-check("Stretch 0: Beat Count unchanged, other registers kept", beats(0, 16) == (16, True))
-check("Stretch +100 %: double speed = half the beats (16 -> 8); -100 %: 32", beats(100, 16)[0] == 8 and
-      beats(-100, 16)[0] == 32)
-check("Stretch +50 %: 16 / 1.5 = 10.67 -> 11 beats (quantized); -50 %: 24", beats(50, 16)[0] == 11 and
-      beats(-50, 16)[0] == 24)
-check("Stretch on Beat Count Auto (0): stays Auto", beats(100, 0)[0] == 0)
-check("Stretch on the Auto estimate (8 beats, +100 %): 4, s15 = r2, registers kept", beats(100, 0, auto=8) == (4, True))
-check("Stretch: never below 1 beat; sliced pad unchanged", beats(100, 1)[0] == 1 and beats(100, 16, sliced=1)[0] == 16)
+a0 = ticks(0, 16)
+check("Stretch 0: clip length unchanged (16 beats = 4 bars = 8 s = 384000 frames at 120 BPM)",
+      a0[0] == 16 * 960 and a0[1] == a0[2] == 384000, a0)
+a1 = ticks(100, 16)
+check("Stretch +100 %: 8 beats -> 192000 frames (double speed); the stock conversion gets the new length",
+      a1[0] == 8 * 960 and a1[1] == a1[2] == 192000, a1)
+check("Stretch -100 %: 32 beats; +50 %: 16 / 1.5 -> 11 beats (quantized); -50 %: 24",
+      ticks(-100, 16)[0] == 32 * 960 and ticks(50, 16)[0] == 11 * 960 and ticks(-50, 16)[0] == 24 * 960)
+check("Stretch on an Auto estimate with a remainder (8 beats + 100 ticks, +100 %): 4 beats", ticks(100, 8, frac=100)[0] == 4 * 960)
+check("Stretch: never below 1 beat; sliced pad unchanged",
+      ticks(100, 1)[0] == 960 and ticks(100, 16, sliced=1)[0] == 16 * 960)
 
 
 def segments(q, count, extra, unit, synced=1, sliced=0):
@@ -519,6 +518,65 @@ check("Play Len with +0x244 part (count 15 + 1): 1 bar = 4", segments(4, 15, 1, 
 check("Play Len unchanged: sliced pad, Sync None (not synced), Sync Slice",
       segments(4, 16, 0, 960, sliced=1)[0] == 16 and segments(4, 16, 0, 960, synced=0)[0] == 16
       and segments(4, 16, 0, 0xF0000)[0] == 16)
+
+# --- Sync 1/32: list registration, beats table in the clip param handler (real 0x080b6ce8)
+lists.clear()
+e.stub(0x08069E7C, fake_register)
+e.call(SYM["sync_register"], 0, 0x76, 0x080C0EC0, 0x080C4770, stack=(7, 0x080C0EC8))
+del e.stubs[0x08069E7C]
+sl_ = lists.get(0x76)
+sync_names = [e.cstr(e.r32(sl_[1] + 4 * k)) for k in range(sl_[2])] if sl_ else []
+check("Sync list: stock 7 + 1/32 appended (old indexes keep their meaning)",
+      sync_names == ["Slice", "1 bar", "1/2", "1/4", "1/8", "1/16", "None", "1/32"] and sl_[0] == "Sync:", sync_names)
+check("Sync beats table: clip param handler's literal points at the 8-entry table",
+      struct.unpack_from("<I", IMG, 0x080B74E4 - 0x08040000)[0] == SYM["sync_beats"])
+
+
+def sync_ticks(index):
+    pad_ = engine_pad()
+    msg_ = e.new(0x20)
+    e.w32(msg_ + 0xC, 0x76)
+    e.w32(msg_ + 0x10, index)
+    e.stub(0x080B40FC, lambda uc: None)
+    e.stub(0x080B44FC, lambda uc: None)
+    e.call(0x080B6CE8, pad_, 0, msg_, 0)
+    del e.stubs[0x080B40FC], e.stubs[0x080B44FC]
+    return struct.unpack("<q", e.mu.mem_read(pad_ + 0x220, 8))[0]
+
+
+got = [sync_ticks(i) for i in range(8)]
+check("Sync -> ticks (real handler): Slice 0xf0000, 1 bar 3840 .. 1/16 240, None 0, 1/32 120",
+      got == [0xF0000, 3840, 1920, 960, 480, 240, 0, 120], got)
+
+# --- parameter page: Play Len / Stretch hidden unless synced (page builder stubbed, real record + list removal)
+def page_ids(quant, sync):
+    set_param(0x2A, quant)
+    set_param(0x76, sync)
+    lst = e.new(4 + 12 * 0x30)
+
+    def fill(uc):
+        ids = [0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C5]
+        e.w32(lst, len(ids))
+        for k, pid in enumerate(ids):
+            e.mu.mem_write(lst + 4 + 12 * k, struct.pack("<HHHHI", pid, 0, 0, 0, 0))
+        uc.reg_write(UC_ARM_REG_R0, 1)
+    e.stub(0x08076D8C, fill)
+    m = e.new(8)
+    e.w32(m, 0x080BF4CC)
+    e.mu.mem_write(m + 4, struct.pack("<H", 0x12))
+    r = e.call(SYM["clip_page"], 0x24013CB0, m, lst, 0)
+    del e.stubs[0x08076D8C]
+    n = e.r32(lst)
+    return r, [struct.unpack_from("<H", e.mu.mem_read(lst + 4 + 12 * k, 2))[0] for k in range(n)]
+
+
+full = [0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C5]
+short = [0x6F, 0xB4, 0x2A, 0x76, 0x1C3]
+check("page: synced (Quant 1 bar, Sync 1/4): Play Len and Stretch shown; builder's result passed on",
+      page_ids(3, 3) == (1, full), page_ids(3, 3))
+check("page: Sync 1/32 counts as synced", page_ids(3, 7)[1] == full)
+check("page: Quant None, Sync None or Slice: Play Len and Stretch hidden, Shift stays",
+      page_ids(8, 3)[1] == short and page_ids(3, 6)[1] == short and page_ids(3, 0)[1] == short)
 
 # --- machine modes after the voice
 for name in ("SP1200", "SP-12", "S950", "MPC60", "SP Raw"):

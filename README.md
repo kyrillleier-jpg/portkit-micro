@@ -10,14 +10,15 @@ bitbox micro, Firmware 2.3.4. Keine Firmware in diesem Repo: Der Patcher arbeite
 | Fidelity (Interp-Liste: Normal, HighQ, SP1200, SP-12, S950, MPC60, SP Raw, 16k..2k) | am Geraet: laeuft, auf Sample-Pads einstellbar (pk1) |
 | 24-dB-SVF (ersetzt den Pad-Biquad), Res sauber | durch Emulation bestaetigt, nicht am Geraet |
 | Drive (tanh, vor den Filtern) und Filter 2 + Res 2 (zweiter 24-dB-SVF in Serie), neue Regler auf der Hauptseite jedes Pad-Modus (`patches/sound.py`); alte Presets bekommen Defaults | pkF: durch Emulation bestaetigt, nicht am Geraet |
-| Shift fuer Clips (−100..100 ms, dreht den Loop gegen das Raster; Loop-Seite der Clip-Pads, `src/clipshift.c`) | pkG: durch Emulation bestaetigt, nicht am Geraet |
+| Shift fuer Clips (−100..100 ms, dreht den Loop gegen das Raster; Loop-Seite der Clip-Pads, `src/clipshift.c`) | pkI am Geraet: funktioniert |
 | Abspiellaenge fuer Clips (Play Len: Full, 1/4..32 Takte; Loop-Seite, mit Sync) | pkH: durch Emulation bestaetigt, nicht am Geraet |
-| Stretch fuer Clips (±100 %, ueber den Beat Count, auf ganze Beats quantisiert; Loop-Seite) | pkI: durch Emulation bestaetigt, nicht am Geraet |
+| Stretch fuer Clips (±100 %, ueber die Clip-Laenge in Beats, auf ganze Beats quantisiert, braucht Sync; Loop-Seite) | pkI am Geraet: ohne Wirkung (Auto); pkJ: korrigiert, durch Emulation bestaetigt, nicht am Geraet |
+| Sync-Raster 1/32 (Clips); Play Len / Stretch ausgeblendet, wenn Quant Size / Sync sie unwirksam machen | pkK: durch Emulation bestaetigt, nicht am Geraet |
 | Machine-Drive (Saturation als Wandler-Eingang) | nicht portiert (Micro hat keinen Saturation-Parameter) |
 | Fidelity auch auf der Pad-Seite von Clip, Slicer, Granular (`patches/pages.py`) | durch Emulation bestaetigt, nicht am Geraet |
 | Pads 9-16 als zweite Seite des Pad-Rasters (`patches/padpages.py`), Umschalten nur per Button: Pads = Linkspfeil, Mixer = Feld oben links, Effects = erneuter Druck auf die gewaehlte Zelle DLY/RVB, Pad-Waehler = Linkspfeil (Pad-Namen 5 Zeichen, folgt der Seite des markierten Pads); Encoder waehlt innerhalb der Seite | pkB am Geraet: Seiten und Waehler gehen; pkE: Encoder auf Seite 2 (Encoder-Listen des Pads-Bildschirms), nicht am Geraet |
 
-Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkI`.
+Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkK`.
 
 ## Bauen
 
