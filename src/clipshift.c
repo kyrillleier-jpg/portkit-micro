@@ -42,7 +42,8 @@ typedef int (*frames_fn)(void *stream);
 #define P_SHIFT        0x1c3
 #define P_PLAYLEN      0x1c4      /* list index: 0 = Full, q = q quarter bars (1 .. 128) */
 #define PAD_SEGMENTS   0x240      /* + 0x244: segment count */
-#define P_STRETCH      0x1c5      /* -100 .. 100 % */
+#define P_SMODE        0x1c7      /* Stretch Mode (src/stretch.c): Auto / Jump / Smooth */
+#define P_STRETCH      0x1c6      /* -100 .. 100 %; not 0x1c5: the parameter command 0x0807d358 takes that id itself (0x0807d37e) */
 #define PAD_SYNCED     0x1f5
 #define PAD_UNIT_TICKS 0x220      /* int64 */
 #define TICKS_PER_BEAT 960
@@ -52,6 +53,7 @@ typedef int (*frames_fn)(void *stream);
 #define UNKNOWN_FRAMES 0x10000000
 
 unsigned pad_setting(const uint8_t *pad, unsigned param);     /* filter.c: the pad's value from its app record */
+
 
 /* the pad's shift in frames, 0 if none applies; *frames = the file's frame count */
 static int shift_of(const uint8_t *pad, void *stream, int *frames)
@@ -193,6 +195,12 @@ static int stretched_count(const uint8_t *pad, int count)
     return c < 1 ? 1 : c;
 }
 
+/* stretch.c: the speed for the smooth (WSOLA) read */
+float clip_stretch_speed(const uint8_t *pad)
+{
+    return clip_speed_of(pad);
+}
+
 /* thunk (clip_pos_thunk): `vmul.f32 s16, s15, s16` (segment index x segment length) at 0x080b4a68 */
 float clip_speed(const uint8_t *pad)
 {
@@ -259,13 +267,15 @@ static int list_has(const uint8_t *list, unsigned param)
 int clip_page(void *app, const void *msg, void *list, int arg)
 {
     int r = fw_page(app, msg, list, arg);
-    if (!list_has(list, P_PLAYLEN) && !list_has(list, P_STRETCH))
+    if (!list_has(list, P_PLAYLEN) && !list_has(list, P_STRETCH) && !list_has(list, P_SMODE))
         return r;
     const void *rec = fw_record(app, msg);
     int quant = fw_store_get(rec, P_QUANT), sync = fw_store_get(rec, P_SYNC);
     if (quant == QUANT_NONE || sync == SYNC_SLICE || sync == SYNC_NONE) {
         fw_list_remove(list, P_PLAYLEN);
         fw_list_remove(list, P_STRETCH);
+        fw_list_remove(list, P_SMODE);
     }
     return r;
 }
+

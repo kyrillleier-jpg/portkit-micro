@@ -529,3 +529,71 @@ pkM: Setup-Eingriffe (0x080B42A8 / 0x080B44DA) und das Nachsenden (0x0807D91A) e
 - 0x080B49B4 `ldr.w r3, [r4, #0x240]` (Test "letztes Segment") → Anzahl / Speed (`clip_last_thunk`)
 Stretch ist damit stufenlos (nicht mehr auf Beats gerundet) und wirkt ab dem naechsten Segment.
 Tests: echter Segment-Start (0, ±100 %, +50 %), Schleifengrenze mit Stretch und Play Len, Letztes-Segment-Thunk.
+
+## Hardware-Test pkM und Diagnose-Build pkN (2026-10-10)
+
+pkM am Geraet: Stretch weiter ohne Wirkung. Da Play Len (gleiche Funktion `clip_segments`) wirkt, liest die
+Engine Stretch vermutlich als 0 oder die Segment-Pfade laufen anders. Records in Emulation: Typ 3 64/64, Typ 0x45 42/64,
+0x1C5 vorhanden; Typ-1-Werte roh gespeichert (Steps 0x46 Default 16).
+pkN (DIAG): Pads-Kopfzeile "U<Stretch im Record des gewaehlten Pads> E<Stretch, zuletzt von der Engine gelesen>
+s<Aufrufe Schleifengrenze> p<Aufrufe Segment-Start-Position> <Anzahl stock>><Anzahl unsere>" (Zaehler mod 10, Anzahl −1 =
+nicht synchron). Engine-Seite in 0x2406C180 (`clipdiag`, src/clipshift.c).
+
+## Hardware-Test pkN, pkO verworfen, Build pkP (2026-10-10)
+
+pkN am Geraet (Fotos, Clip-Pads "RC000…"): "U0 E0 s.. p.. 88>16". Stretch steht nicht im Record (U0), die Engine liest 0;
+Schleifengrenze und Segment-Start laufen (s, p zaehlen; 88 Segmente, Play Len → 16). Am Geraet: Stretch springt beim
+Verlassen der Ansicht / Neustart auf 0; Shift (gleicher Typ 1) wird gespeichert.
+pkO (Shift als Liste, Stretch als Typ 9) verworfen, nicht ausgeliefert: der Regler-Typ ist es nicht.
+Verbleibender Unterschied: Stretch ist der letzte (64.) Eintrag; Kapazitaet 64 (0x0808949E, nur bei der ersten
+Allokation gesetzt: 0x0808954E in 0x08089548, 0x08089F98 in 0x08089F8C), Typ 3 in Emulation genau 64. Warum am Geraet ein
+Eintrag mehr gebraucht wuerde, ist nicht gefunden (Init ohne Bedingungen; Add nur in 0x08089548 / 0x08089E04).
+pkP: Kapazitaet 64 → 72 an beiden Stellen (`movs r1, #0x40` → `#0x48`, +64 Byte je Record). DIAG-Kopfzeile jetzt
+"U<Record> E<Engine> c<Eintraege>/<Kapazitaet><+/- Stretch im Record> s<Aufrufe> <Anzahl>><unsere>".
+
+## Hardware-Test pkP, Ursache Stretch, Build pkQ (2026-10-10)
+
+pkP am Geraet: "U0 E0 c64/72+ s.. 88>16": Stretch steht im Record, bleibt aber 0. Ursache: der Parameter-Befehl
+0x0807D358 faengt die ID 0x1C5 selbst ab (0x0807D37E: `movw r2, #0x1c5; cmp r4, r2` → app+0x8007 = (Wert ≠ 0), Ende, kein
+Store-Set). Weitere Stock-Verwendungen von 0x1C5: 0x0806E614, 0x0806E664, 0x080774E6, 0x0808234A, 0x0808245A. Freie IDs
+geprueft (mov/cmp-Immediates im Code): 0x1C0–0x1C4, 0x1C6 unbenutzt; benutzt u. a. 0x1BF, 0x1C5, 0x1CC.
+pkQ: Stretch = 0x1C6 (xml `pkstretch` bleibt), Diagnose entfernt, Kapazitaet 72 bleibt (8 Eintraege Reserve).
+Test: keine mov/cmp-Immediates der neuen IDs im Stock-Code (findet 0x1C5 an den 6 Stellen).
+
+## Smooth Time-Stretch (WSOLA) und Lastanzeige (Build pkR, 2026-10-10)
+
+pkQ am Geraet: Stretch (ID 0x1C6) funktioniert.
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| 0x080B55AC | Slot lesen + umrechnen `(pad, -, int64 pos, s0 Rate, [sp] n, &verbraucht, &frac, Quellpuffer, Zielpuffer, &Ergebnis)` | einziger Aufrufer 0x080B58FC (Slot-Leser 0x080B5728; frac = Slot+0x1C, Position Slot+8); Rate 1 & frac 0: direkt lesen, sonst n·Rate+8 lesen + 0x0809FF64 | vermutet |
+| Puffer | +0 Kapazitaet, +4 Frames (0 = Kapazitaet), +8 L, +0xC R, +0x10 still, +0x11 stereo | 0x080A321C mono setzen (→ L), 0x080A32D4 stereo setzen (L, R), 0x080A3288 lesen | vermutet |
+| 0x080A4650 | Stream stereo (+0x1C) | Stock: stereo → 0x080A44C8, sonst 0x080A4500 Kanal 0 | vermutet |
+| 0x08040E90 → 0x080423CC | audioTask (FreeRTOS, Def. 0x080BED8C, Prio 3, Stack 0xA00) | wartet auf DMA-Haelfte, dann 0x08093D44 (Eingang) und 0x08093E48 (Engine + Ausgang), je 2 Aufrufstellen | vermutet |
+| 0x08070660 | Statusleiste zeichnen | +0x34 "%d:%d" (Takt:Schlag), +0x13C Titel, +0x194 Fortschritt, +0x8C rechts: Aufnahme "%dMB" / "FULL" / "" (0x08070748) | vermutet |
+
+Umsetzung pkR:
+- `src/stretch.c`: `clip_render` (Hook 0x080B58FC, EXCLUSIVE). Smooth: Lesetempo c = Pad+0x1FC × Stretch-Speed / Pad+0x204
+  (Datei-Frames pro Ausgangs-Frame; Segmente schliessen nahtlos), Grains 2 × 512 Frames mit Hann-Fenster, 50 % Overlap,
+  gelesen mit der Pitch-Rate (s0); neuer Grain-Start per WSOLA: ±256 Frames, grob dezimiert (8) mit 64er-Vorlage, fein
+  ±32 Frames mit 64er-Vorlage, Kriterium c²/E mit Vorzeichen. Lesen ueber clip_read1/2 (Shift gilt). Grain-Zustand je
+  Pad × Slot (64 × 40 Byte) ab 0x2406C400; Neustart bei Positionssprung (Segment-Start). Suchpuffer ~1,6 KB auf dem
+  audioTask-Stack.
+- Parameter 0x1C7 "Str Mode:" (Liste Auto / Jump / Smooth, xml `pkstretchmode`, Default Auto = Smooth bei Stretch ≠ 0)
+  auf der Clip-Loop-Seite nach Stretch; mit Play Len / Stretch ausgeblendet, wenn nicht synchron. Record 65 / 72.
+- `src/load.c`: DWT-Zyklenzaehler (TRCENA, CYCCNTENA); Last = (0x08093D44 + 0x08093E48) / Abstand der Blockstarts,
+  geglaettet (0,02), Spitze mit Abfall; Anzeige "34%" (Spitze > 90 %: "34%!") im leeren Fall von +0x8C (0x08070748).
+Tests (Emulation, echte Lesefunktionen, Speicher-Stream 1 kHz): Jump = Stock; Smooth +100 % / −50 % / Tempo-Folgen 1,5× /
+Pitch-Rate 2: Vorschub exakt, Tonhoehe gleich, Pegel stabil, keine Klicks; Lastanzeige 40 % bei 4000 / 10000 Zyklen.
+Aufwand (Instruktionen pro 128-Frame-Block): Stock ~1100, Smooth ~28500 (≈ 11 M/s je Stimme). Hoerproben (synthetisch)
+in out/stretch_preview (nicht im Repo).
+
+## Hardware-Test pkR, Lastanzeige (Build pkS, 2026-10-10)
+
+pkR am Geraet: Smooth-Stretch funktioniert; die Lastanzeige ist nicht zu sehen.
+Ursache: Literale vertauscht. 0x08070660: Wert = app+0xDCC8 (Aufnahmespeicher, im Leerlauf −1, gesetzt 0x08075766);
+< 0 oder ≥ 256 MB → "" (Setzen an 0x08070754), < 1 MB → "FULL" (0x08070748), sonst "%dMB". Der Hook sass auf "FULL".
+Layout der Statusleiste (Ctor 0x080704C0, Emulation): +0x34 Takt:Schlag {10, 222, 100, 20}, +0xE4 {80, 222, 200, 20},
++0x8C Aufnahme-Text {80, 222, 48, 20} (Ausrichtung +0xDF = 6), +0x13C Titel, +0x194 Fortschritt {256, 224, 63, 12};
+App-Flag app+0x7FF8 (bereit) wird einmal gesetzt (0x080751F8), Texte also bei jedem Zeichnen.
+pkS: Hook an 0x08070754 (leerer Fall), Feld nach rechts {280, 222, 39, 20}.

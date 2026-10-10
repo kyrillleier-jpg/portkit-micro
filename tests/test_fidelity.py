@@ -19,7 +19,7 @@ from unicorn.arm_const import (UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_A
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "patches"))
-from thumb import BASE, symbols  # noqa: E402
+from thumb import BASE, bl_target, symbols  # noqa: E402
 
 IMG = open(os.path.join(ROOT, "out", "fidelity+pages+padpages+sound+cave", "MICRO.BIN"), "rb").read()
 SYM = symbols(os.path.join(ROOT, "out", "cave.elf"))
@@ -54,6 +54,7 @@ class Emu:
         mu.reg_write(UC_ARM_REG_C1_C0_2, 0xF << 20)   # FPU on
         mu.reg_write(UC_ARM_REG_FPEXC, 0x40000000)
         mu.mem_map(0x30000000, 0x200000)
+        mu.mem_map(0xE0000000, 0x100000)         # SCS: DWT cycle counter, DEMCR (load meter)
         self.heap = 0x30000000                   # scratch for test objects (D2 SRAM; clear of PARK / pad state)
         self.alloc_at = 0x24040000               # bump allocator for the firmware's own allocations
         self.stubs, self.hooked = {}, set()
@@ -165,12 +166,15 @@ check("label 'Fidelity:', xml name stays 'interpqual'",
 check("new knobs registered: Filter 2 (bipolar), Res 2, Drive",
       knobs == [(0x1C0, 9, "Filter 2:", -1000, 1000, "pkfilt2"), (0x1C1, 8, "Res 2:", 0, 1000, "pkres2"),
                 (0x1C2, 8, "Drive:", 0, 1000, "pkdrive"), (0x1C3, 1, "Shift ms:", -100, 100, "pkshift"),
-                (0x1C5, 1, "Stretch %:", -100, 100, "pkstretch")], knobs)
+                (0x1C6, 1, "Stretch %:", -100, 100, "pkstretch")], knobs)
 pl = lists.get(0x1C4)
 pl_names = [e.cstr(e.r32(pl[1] + 4 * k)) for k in range(pl[2])] if pl else []
 check("Play Len list: Full, 1/4 .. 32 bars in quarter bars, xml pkplaylen",
       pl and pl[0] == "Play Len:" and pl[3] == "pkplaylen" and len(pl_names) == 129 and pl_names[:6] ==
       ["Full", "1/4", "1/2", "3/4", "1", "1 1/4"] and pl_names[-1] == "32" and pl_names[8] == "2", pl_names[:10])
+sm = lists.get(0x1C7)
+check("Stretch Mode list: Auto, Jump, Smooth (xml pkstretchmode)", sm and sm[0] == "Str Mode:" and sm[2] == 3
+      and [e.cstr(e.r32(sm[1] + 4 * k)) for k in range(3)] == ["Auto", "Jump", "Smooth"] and sm[3] == "pkstretchmode")
 del e.stubs[0x08069E7C]
 del e.stubs[0x08069ED4]
 
@@ -209,7 +213,7 @@ e.call(0x08089FC4, rec3, typ3)
 ids3, cnt3, cap3 = store_ids(rec3)
 check("pad records (type 0x45 and 3): Filter 2 = 0, Res 2 = 500, Drive = 0, within capacity",
       all(d.get(0x1C0) == 0 and d.get(0x1C1) == 500 and d.get(0x1C2) == 0 and d.get(0x1C3) == 0 and d.get(0x1C4) == 0
-          and d.get(0x1C5) == 0 for d in (ids45, ids3))
+          and d.get(0x1C6) == 0 for d in (ids45, ids3))
       and cnt3 <= cap3 and cnt45 <= cap45 and 0xAA in ids3, (cnt45, cap45, cnt3, cap3))
 
 
@@ -455,16 +459,17 @@ del e.stubs[0x080A4624]
 check("Shift: segment prefetch seek follows (wrapped)", seeks == [472, 580], seeks)
 set_param(0x1C3, 0)
 clip_loop = [struct.unpack_from("<8H", IMG, t + 2 * 0x5A - 0x08040000) for t in (0x080C6A1C, 0x080C6C38)]
-check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len, Stretch",
-      all(m == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C5, 0) for m in clip_loop), clip_loop)
-check("full pad record (type 3): exactly at capacity (64)", cnt3 == cap3 == 64, (cnt3, cap3))
+check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len, Stretch, Stretch Mode",
+      all(m == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C6, 0x1C7) for m in clip_loop), clip_loop)
+check("full pad record (type 3): 65 entries, capacity raised to 72", cnt3 == 65 and cap3 == 72 and ids3.get(0x1C7) == 0,
+      (cnt3, cap3))
 
 
 
 
 
 def segments(q, count, extra, unit, synced=1, sliced=0, stretch=0):
-    set_param(0x1C5, stretch)
+    set_param(0x1C6, stretch)
     p = engine_pad()
     e.w32(p + 0x240, count)
     e.w32(p + 0x244, extra)
@@ -476,7 +481,7 @@ def segments(q, count, extra, unit, synced=1, sliced=0, stretch=0):
     e.call(SYM["clip_segments_thunk"], 0x11, 0x22, 0x33, 0x44, regs=[(UC_ARM_REG_R6, p)])
     r = [e.mu.reg_read(x) for x in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
     set_param(0x1C4, 0)
-    set_param(0x1C5, 0)
+    set_param(0x1C6, 0)
     return (r[1] + r[2]) & 0xFFFFFFFF, r, count          # as the firmware's `add r2, r1`
 
 
@@ -497,12 +502,12 @@ check("Stretch: loop bound 16 -> 8 segments at +100 %, 32 at -100 %, 11 at +50 %
 
 
 def last_count(stretch, count=16):
-    set_param(0x1C5, stretch)
+    set_param(0x1C6, stretch)
     p = engine_pad()
     e.w32(p + 0x240, count)
     e.call(SYM["clip_last_thunk"], 0x11, 0x22, 0x33, 0x44, regs=[(UC_ARM_REG_R4, p)])
     r = [e.mu.reg_read(x) for x in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
-    set_param(0x1C5, 0)
+    set_param(0x1C6, 0)
     return r
 
 
@@ -548,7 +553,7 @@ def page_ids(quant, sync):
     lst = e.new(4 + 12 * 0x30)
 
     def fill(uc):
-        ids = [0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C5]
+        ids = [0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C6, 0x1C7]
         e.w32(lst, len(ids))
         for k, pid in enumerate(ids):
             e.mu.mem_write(lst + 4 + 12 * k, struct.pack("<HHHHI", pid, 0, 0, 0, 0))
@@ -563,7 +568,7 @@ def page_ids(quant, sync):
     return r, [struct.unpack_from("<H", e.mu.mem_read(lst + 4 + 12 * k, 2))[0] for k in range(n)]
 
 
-full = [0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C5]
+full = [0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C6, 0x1C7]
 short = [0x6F, 0xB4, 0x2A, 0x76, 0x1C3]
 check("page: synced (Quant 1 bar, Sync 1/4): Play Len and Stretch shown; builder's result passed on",
       page_ids(3, 3) == (1, full), page_ids(3, 3))
@@ -589,7 +594,7 @@ e.w32(vstream + 0x24, 0x77)
 
 
 def setup(stretch, beatcount=16):
-    set_param(0x1C5, stretch)
+    set_param(0x1C6, stretch)
     p_ = engine_pad()
     e.w32(p_ + 0x24, vstream)
     e.w32(p_ + 0xB80, beatcount)
@@ -598,7 +603,7 @@ def setup(stretch, beatcount=16):
     fp_ = e.new(0x40)
     e.wf(fp_ + 0x18, [120.0])
     e.call(0x080B40FC, p_, fp_)
-    set_param(0x1C5, 0)
+    set_param(0x1C6, 0)
     f = lambda o: e.rf(p_ + o, 1)[0]
     return round(f(0x1FC)), round(f(0x204)), e.r32(p_ + 0x210), round(f(0x258))
 
@@ -611,7 +616,7 @@ def seg_start(stretch, k, count=None):
     """real segment start 0x080b490c after the real setup: (slot file start, prefetch seek, output frames to the end)"""
     seeks = []
     e.stub(0x080A4624, lambda uc: seeks.append(uc.reg_read(UC_ARM_REG_R1)))
-    set_param(0x1C5, 0)
+    set_param(0x1C6, 0)
     p_ = engine_pad()
     e.w32(p_ + 0x24, vstream)
     e.w32(p_ + 0xB80, 16)
@@ -620,13 +625,13 @@ def seg_start(stretch, k, count=None):
     fp_ = e.new(0x40)
     e.wf(fp_ + 0x18, [120.0])
     e.call(0x080B40FC, p_, fp_)
-    set_param(0x1C5, stretch)
+    set_param(0x1C6, stretch)
     del seeks[:]
     slot = e.call(0x080B490C, p_, e.new(0x400), 0, k, stack=(fp_, 0, 0))
     del e.stubs[0x080A4624]
     base = p_ + 0x30 + 0x70 * slot
     r = (struct.unpack("<q", e.mu.mem_read(base + 8, 8))[0], seeks, e.r32(base + 0x28))
-    set_param(0x1C5, 0)
+    set_param(0x1C6, 0)
     return r
 
 
@@ -636,6 +641,122 @@ check("segment start, Stretch +100 %: segment 3 at 144000 (double speed), same o
       seg_start(100, 3) == (144000, [143992], 23744), seg_start(100, 3))
 check("segment start, Stretch -100 %: segment 3 at 36000 (half speed); +50 %: 108000",
       seg_start(-100, 3)[0] == 36000 and seg_start(50, 3)[0] == 108000, (seg_start(-100, 3), seg_start(50, 3)))
+
+# --- new parameter ids: the stock code must not use them itself (0x1c5 is taken by the parameter command, 0x0807d37e)
+from capstone import CS_ARCH_ARM, CS_MODE_MCLASS, CS_MODE_THUMB, Cs  # noqa: E402
+_md = Cs(CS_ARCH_ARM, CS_MODE_THUMB | CS_MODE_MCLASS)
+_md.skipdata = True
+_ours = {f"#{v:#x}" for v in (0x1C0, 0x1C1, 0x1C2, 0x1C3, 0x1C4, 0x1C6, 0x1C7)}
+_uses = [hex(i.address) for i in _md.disasm(IMG[:0x080BC000 - 0x08040000], 0x08040000)   # code, not the data after it
+         if i.mnemonic in ("movs", "movw", "mov.w", "cmp", "cmp.w") and "sp" not in i.op_str
+         and any(i.op_str.endswith(v) for v in _ours)]
+check("new parameter ids 0x1c0-0x1c4, 0x1c6, 0x1c7: no immediate use in the stock code", not _uses, _uses)
+
+# --- smooth time stretch (WSOLA, clip_render in place of 0x080b55ac), real stream reads on an in-memory mono stream
+SR = 48000
+FILE_N = 96000
+wsrc = e.new(0x40)
+wplane = e.new(4 * FILE_N)
+e.wf(wplane, [0.8 * math.sin(2 * math.pi * 1000 * i / SR) for i in range(FILE_N)])
+e.w32(wsrc + 4, wplane)
+e.w32(wsrc + 8, wplane)
+e.w32(wsrc + 0x10, FILE_N)
+
+
+def wbuf(cap):
+    b = e.new(0x20)
+    e.w32(b, cap)
+    e.w32(b + 4, cap)
+    e.w32(b + 8, e.new(4 * cap))
+    e.w32(b + 0xC, e.new(4 * cap))
+    return b
+
+
+def render(stretch, mode=0, rate=1.0, blocks=120, n=128, seglen=24000.0, unit=24000.0, start=4000, slot=1):
+    set_param(0x1C6, stretch)
+    set_param(0x1C7, mode)
+    p_ = engine_pad()
+    e.w32(p_ + 0x24, wsrc)
+    e.wf(p_ + 0x1FC, [seglen])
+    e.wf(p_ + 0x204, [unit])
+    e.mu.mem_write(p_ + 0x1F5, b"\x01")
+    frac_p = p_ + 0x30 + 0x70 * slot + 0x1C
+    e.wf(frac_p, [0.0])
+    src_b, out_b = wbuf(600), wbuf(600)
+    cons, res = e.new(4), e.new(4)
+    pos, out, steps = start, [], []
+    for _ in range(blocks):
+        ok = e.call(SYM["clip_render"], p_, 0, pos & 0xFFFFFFFF, 0, s=(rate,),
+                    stack=(n, cons, frac_p, src_b, out_b, res))
+        rb = e.r32(res)
+        out += e.rf(e.r32(rb + 8), n)
+        c = struct.unpack("<i", e.mu.mem_read(cons, 4))[0]
+        steps.append(c)
+        pos += c
+    set_param(0x1C6, 0)
+    set_param(0x1C7, 0)
+    return out, pos - start, ok
+
+
+def freq(sig):
+    z = sum(1 for a, b in zip(sig, sig[1:]) if a < 0 <= b)
+    return z * SR / len(sig)
+
+
+def rms(sig):
+    return math.sqrt(sum(v * v for v in sig) / len(sig))
+
+
+o0, adv0, ok0 = render(0, mode=1)                                  # Jump: the stock path
+check("Stretch Mode Jump: stock read (1 kHz, advances 1 frame per frame)", ok0 == 1 and abs(freq(o0[256:]) - 1000) < 30
+      and abs(adv0 - 120 * 128) <= 2, (freq(o0[256:]), adv0))
+o1, adv1, ok1 = render(100)                                        # Auto + Stretch +100 %: smooth, double speed
+check("Smooth +100 %: file advances 2 frames per output frame (double tempo)", abs(adv1 - 2 * 120 * 128) <= 2, adv1)
+check("Smooth +100 %: pitch unchanged (1 kHz), level steady", abs(freq(o1[1024:]) - 1000) < 30
+      and abs(rms(o1[1024:]) - 0.8 / math.sqrt(2)) < 0.08, (freq(o1[1024:]), rms(o1[1024:])))
+check("Smooth +100 %: no clicks (sample-to-sample step within a sine's)",
+      max(abs(a - b) for a, b in zip(o1[1024:], o1[1025:])) < 0.2, max(abs(a - b) for a, b in zip(o1[1024:], o1[1025:])))
+o2, adv2, _ = render(-50)
+check("Smooth -50 %: 2/3 tempo, pitch unchanged", abs(adv2 - 120 * 128 / 1.5) <= 2 and abs(freq(o2[1024:]) - 1000) < 30,
+      (adv2, freq(o2[1024:])))
+o3, adv3, _ = render(0, mode=2, seglen=36000.0)                     # Smooth at 0: follows a song tempo 1.5 x the clip's
+check("Smooth, Stretch 0, clip slower than the song (segment 36000 file / 24000 out): 1.5 x tempo, same pitch",
+      abs(adv3 - 1.5 * 120 * 128) <= 2 and abs(freq(o3[1024:]) - 1000) < 30, (adv3, freq(o3[1024:])))
+o4, adv4, _ = render(0, mode=2, rate=2.0)
+check("Smooth, pitch rate 2 (an octave up): 2 kHz, tempo still from the segments (1 x)",
+      abs(freq(o4[1024:]) - 2000) < 60 and abs(adv4 - 120 * 128) <= 2, (freq(o4[1024:]), adv4))
+o5, adv5, _ = render(100, mode=1)
+check("Stretch +100 % in Jump mode: stock read (pitch and advance 1:1 within the segment)",
+      abs(adv5 - 120 * 128) <= 2 and abs(freq(o5[256:]) - 1000) < 30)
+
+# --- audio load meter: DWT counter driven by the stubs (1000 + 3000 busy, 10000 per block -> 40 %)
+cyc = [0]
+def tick(k):
+    def f(uc):
+        cyc[0] += k
+        e.w32(0xE0001004, cyc[0])
+    return f
+e.stub(0x08093D44, tick(1000))
+e.stub(0x08093E48, tick(3000))
+for _ in range(400):
+    cyc[0] += 6000
+    e.w32(0xE0001004, cyc[0])
+    e.call(SYM["load_in"], 0, 0, 0)
+    e.call(SYM["load_out"], 0, 0, 0, 0)
+del e.stubs[0x08093D44], e.stubs[0x08093E48]
+texts = []
+e.stub(0x08060366, lambda uc: texts.append(e.cstr(uc.reg_read(UC_ARM_REG_R1))))
+lw = e.new(0x60)
+e.mu.mem_write(lw + 4, struct.pack("<4i", 80, 222, 48, 20))
+e.call(SYM["load_text"], lw, 0)
+del e.stubs[0x08060366]
+check("load meter: 4000 of 10000 cycles per block -> 40 %; DWT enabled (TRCENA, CYCCNTENA)",
+      texts == ["40%"] and e.r32(0xE000EDFC) & (1 << 24) and e.r32(0xE0001000) & 1, texts)
+check("load text moved to the right end of the status bar (x 280, w 39)",
+      struct.unpack("<4i", e.mu.mem_read(lw + 4, 16)) == (280, 222, 39, 20))
+check("load hook on the status bar's idle (empty) text, not on FULL",
+      bl_target(IMG[0x08070754 - 0x08040000:0x08070758 - 0x08040000], 0x08070754) == SYM["load_text"] & ~1
+      and bl_target(IMG[0x08070748 - 0x08040000:0x0807074C - 0x08040000], 0x08070748) == 0x08060366)
 
 # --- machine modes after the voice
 for name in ("SP1200", "SP-12", "S950", "MPC60", "SP Raw"):
