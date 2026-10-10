@@ -19,13 +19,12 @@
  * beat, 4/4). Sync None or Slice: no cap.
  *
  * Stretch for clip pads: -100 .. +100 %, speed x 1 / (1 + |p| / 100) below 0 and x (1 + p / 100) above (so -100 %
- * is half, +100 % double speed). Clips play their file at its own rate and keep time by restarting each Sync unit at the
- * file position of the current beat (re/symbols.md "Stretch"); the clip's length in beats sets that mapping, so fewer
- * beats = faster, pitch unchanged, the same way the stock firmware follows the song tempo. The clip setup 0x080b40fc
- * takes the length in ticks (beats x 960; Beat Count or, on Auto, the rounded estimate) to 0x0809f1f8 at 0x080b42a8
- * (Auto) / 0x080b44da (Beat Count); there it becomes round(beats / speed) beats, at least 1, quantized to whole beats.
- * The setup runs at every trigger and loop start (0x080b5f5a), so a change applies from the next loop. Needs Sync on;
- * smaller Sync units chop finer.
+ * is half, +100 % double speed). Clips play their file at its own rate and keep time by starting each Sync unit
+ * (segment k) at file position k x segment length (pad +0x1fc), 0x080b4a68 in the segment start 0x080b490c
+ * (re/symbols.md "Stretch"). Stretch scales that position by the speed, live at every segment start (pitch unchanged,
+ * same jumping as when the firmware follows the song tempo), and the clip's segment count by 1 / speed: the loop bound
+ * (clip_segments, with Play Len) and the "last segment" test 0x080b49b4. (pkJ-pkL scaled the clip length in the setup
+ * 0x080b40fc instead; a synced clip does not re-run that setup on the device.)
  */
 #include <stdint.h>
 
@@ -135,6 +134,8 @@ void clip_seek(void *stream, int pos, const uint8_t *pad)
     fw_seek(stream, pos);
 }
 
+static int stretched_count(const uint8_t *pad, int count);
+
 /* --- play length ------------------------------------------------------------------------------------------------- */
 const char *const playlen_names[129] = {
     "Full", "1/4", "1/2", "3/4", "1", "1 1/4", "1 1/2", "1 3/4", "2", "2 1/4",
@@ -161,6 +162,7 @@ int clip_segments(const uint8_t *pad)
         return count;
     if (!pad[PAD_SYNCED] || count < 1)
         return count;
+    count = stretched_count(pad, count);
     int q = (int)pad_setting(pad, P_PLAYLEN);
     int32_t unit = *(const int32_t *)(pad + PAD_UNIT_TICKS);
     if (q <= 0 || q > 128 || unit <= 0 || unit >= SLICE_TICKS || *(const int32_t *)(pad + PAD_UNIT_TICKS + 4))
@@ -172,31 +174,38 @@ int clip_segments(const uint8_t *pad)
 }
 
 /* --- stretch -------------------------------------------------------------------------------------------------------- */
-static int stretched(const uint8_t *pad, int beats)
+/* the pad's Stretch speed (1 = none) */
+static float clip_speed_of(const uint8_t *pad)
 {
-    if (beats < 1 || pad[PAD_SLICED])
-        return beats;
+    if (pad[PAD_SLICED])
+        return 1.0f;
     int p = (int)pad_setting(pad, P_STRETCH);
     if (p == 0 || p < -100 || p > 100)
-        return beats;
-    /* beats / speed: speed = (100 + p) / 100 above 0, 100 / (100 - p) below */
-    int num = p > 0 ? beats * 100 : beats * (100 - p);
-    int den = p > 0 ? 100 + p : 100;
-    int b = (num + den / 2) / den;
-    return b < 1 ? 1 : b > 512 ? 512 : b;
+        return 1.0f;
+    return p > 0 ? 1.0f + (float)p * 0.01f : 1.0f / (1.0f - (float)p * 0.01f);
 }
 
-/* thunk (clip_ticks_thunk), before 0x0809f1f8(out, &ticks, tempo, ..) in the clip setup; pad in sl */
-void clip_ticks(const uint8_t *pad, int64_t *ticks)
+/* segments at this speed, rounded, at least 1 */
+static int stretched_count(const uint8_t *pad, int count)
 {
-    int64_t t = *ticks;
-    if (t <= 0 || t > (int64_t)512 * TICKS_PER_BEAT * 4)
-        return;
-    int beats = ((int)t + TICKS_PER_BEAT / 2) / TICKS_PER_BEAT;   /* t fits 32 bits (checked above) */
-    int b = stretched(pad, beats);
-    if (b != beats)
-        *ticks = (int64_t)b * TICKS_PER_BEAT;
+    float n = (float)count / clip_speed_of(pad) + 0.5f;
+    int c = (int)n;
+    return c < 1 ? 1 : c;
 }
+
+/* thunk (clip_pos_thunk): `vmul.f32 s16, s15, s16` (segment index x segment length) at 0x080b4a68 */
+float clip_speed(const uint8_t *pad)
+{
+    return clip_speed_of(pad);
+}
+
+/* thunk (clip_last_thunk): `ldr.w r3, [r4, #0x240]` at 0x080b49b4 (r3 - 1 == index: last segment) */
+int clip_last_count(const uint8_t *pad)
+{
+    int count = *(const int32_t *)(pad + PAD_SEGMENTS);
+    return count < 1 ? count : stretched_count(pad, count);
+}
+
 
 /* --- Sync 1/32 ------------------------------------------------------------------------------------------------------ */
 /* Sync (0x76) list: the stock 7 entries (pointers into the stock strings, list at 0x080c4770) + "1/32", appended so the

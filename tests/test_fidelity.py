@@ -460,36 +460,11 @@ check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len,
 check("full pad record (type 3): exactly at capacity (64)", cnt3 == cap3 == 64, (cnt3, cap3))
 
 
-def ticks(p_, beats_, sliced=0, frac=0):
-    """clip_ticks_thunk with a clip of beats_ beats (+ frac ticks) at 120 BPM: (ticks after, frames out, stock frames
-    for those ticks)"""
-    pad_ = engine_pad()
-    e.mu.mem_write(pad_ + 0x254, bytes([sliced]))
-    set_param(0x1C5, p_)
-    t, out, ref = e.new(8), e.new(8), e.new(8)
-    e.mu.mem_write(t, struct.pack("<q", beats_ * 960 + frac))
-    e.call(SYM["clip_ticks_thunk"], out, t, 0x33, 0x44, s=(120.0, 48000.0), regs=[(UC_ARM_REG_SL, pad_)])
-    after = struct.unpack("<q", e.mu.mem_read(t, 8))[0]
-    frames = struct.unpack("<q", e.mu.mem_read(out, 8))[0]
-    e.call(0x0809F1F8, ref, t, s=(120.0, 48000.0))
-    set_param(0x1C5, 0)
-    return after, frames, struct.unpack("<q", e.mu.mem_read(ref, 8))[0]
 
 
-a0 = ticks(0, 16)
-check("Stretch 0: clip length unchanged (16 beats = 4 bars = 8 s = 384000 frames at 120 BPM)",
-      a0[0] == 16 * 960 and a0[1] == a0[2] == 384000, a0)
-a1 = ticks(100, 16)
-check("Stretch +100 %: 8 beats -> 192000 frames (double speed); the stock conversion gets the new length",
-      a1[0] == 8 * 960 and a1[1] == a1[2] == 192000, a1)
-check("Stretch -100 %: 32 beats; +50 %: 16 / 1.5 -> 11 beats (quantized); -50 %: 24",
-      ticks(-100, 16)[0] == 32 * 960 and ticks(50, 16)[0] == 11 * 960 and ticks(-50, 16)[0] == 24 * 960)
-check("Stretch on an Auto estimate with a remainder (8 beats + 100 ticks, +100 %): 4 beats", ticks(100, 8, frac=100)[0] == 4 * 960)
-check("Stretch: never below 1 beat; sliced pad unchanged",
-      ticks(100, 1)[0] == 960 and ticks(100, 16, sliced=1)[0] == 16 * 960)
 
-
-def segments(q, count, extra, unit, synced=1, sliced=0):
+def segments(q, count, extra, unit, synced=1, sliced=0, stretch=0):
+    set_param(0x1C5, stretch)
     p = engine_pad()
     e.w32(p + 0x240, count)
     e.w32(p + 0x244, extra)
@@ -501,6 +476,7 @@ def segments(q, count, extra, unit, synced=1, sliced=0):
     e.call(SYM["clip_segments_thunk"], 0x11, 0x22, 0x33, 0x44, regs=[(UC_ARM_REG_R6, p)])
     r = [e.mu.reg_read(x) for x in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
     set_param(0x1C4, 0)
+    set_param(0x1C5, 0)
     return (r[1] + r[2]) & 0xFFFFFFFF, r, count          # as the firmware's `add r2, r1`
 
 
@@ -515,6 +491,23 @@ check("Play Len 1 bar at Sync 1/16 (64 segments): 16; at Sync 1 bar (4 segments)
 check("Play Len 1 1/2 bars at Sync 1 bar: rounds to whole units (2)", segments(6, 4, 0, 3840)[0] == 2)
 check("Play Len longer than the clip (8 bars of 4): full length", segments(32, 16, 0, 960)[0] == 16)
 check("Play Len with +0x244 part (count 15 + 1): 1 bar = 4", segments(4, 15, 1, 960)[0] == 4)
+check("Stretch: loop bound 16 -> 8 segments at +100 %, 32 at -100 %, 11 at +50 %; with Play Len 1 bar: 4",
+      segments(0, 16, 0, 960, stretch=100)[0] == 8 and segments(0, 16, 0, 960, stretch=-100)[0] == 32
+      and segments(0, 16, 0, 960, stretch=50)[0] == 11 and segments(4, 16, 0, 960, stretch=-100)[0] == 4)
+
+
+def last_count(stretch, count=16):
+    set_param(0x1C5, stretch)
+    p = engine_pad()
+    e.w32(p + 0x240, count)
+    e.call(SYM["clip_last_thunk"], 0x11, 0x22, 0x33, 0x44, regs=[(UC_ARM_REG_R4, p)])
+    r = [e.mu.reg_read(x) for x in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
+    set_param(0x1C5, 0)
+    return r
+
+
+check("Stretch: last-segment count (r3) 16 / 8 / 32, r0-r2 kept",
+      last_count(0)[3] == 16 and last_count(100)[3] == 8 and last_count(-100) == [0x11, 0x22, 0x33, 32])
 check("Play Len unchanged: sliced pad, Sync None (not synced), Sync Slice",
       segments(4, 16, 0, 960, sliced=1)[0] == 16 and segments(4, 16, 0, 960, synced=0)[0] == 16
       and segments(4, 16, 0, 0xF0000)[0] == 16)
@@ -577,6 +570,72 @@ check("page: synced (Quant 1 bar, Sync 1/4): Play Len and Stretch shown; builder
 check("page: Sync 1/32 counts as synced", page_ids(3, 7)[1] == full)
 check("page: Quant None, Sync None or Slice: Play Len and Stretch hidden, Shift stays",
       page_ids(8, 3)[1] == short and page_ids(3, 6)[1] == short and page_ids(3, 0)[1] == short)
+
+# --- real clip setup 0x080b40fc (fake streamed source: 384000 frames at 48 kHz = 16 beats at 120 BPM)
+vcode = e.new(0x40)
+for k in range(0, 0x40, 2):
+    e.mu.mem_write(vcode + k, b"\x70\x47")                    # bx lr
+vt = e.new(0x40)
+vfns = {0x14: lambda uc: e.mu.mem_write(uc.reg_read(UC_ARM_REG_R0), struct.pack("<q", 384000)),
+        0x18: lambda uc: uc.reg_write(UC_ARM_REG_R0, 48000), 0x20: lambda uc: uc.reg_write(UC_ARM_REG_R0, 2)}
+for off in range(0, 0x40, 4):
+    e.w32(vt + off, (vcode + off) | 1)
+    e.stub(vcode + off, vfns.get(off, lambda uc: uc.reg_write(UC_ARM_REG_R0, 0)))
+vsrc = e.new(0x40)
+e.w32(vsrc, vt)
+vstream = e.new(0x40)
+e.w32(vstream + 0x20, vsrc)
+e.w32(vstream + 0x24, 0x77)
+
+
+def setup(stretch, beatcount=16):
+    set_param(0x1C5, stretch)
+    p_ = engine_pad()
+    e.w32(p_ + 0x24, vstream)
+    e.w32(p_ + 0xB80, beatcount)
+    e.mu.mem_write(p_ + 0x218, struct.pack("<qq", 3840, 960))   # Quant 1 bar, Sync 1/4
+    e.mu.mem_write(p_ + 0x1F5, b"\x01")
+    fp_ = e.new(0x40)
+    e.wf(fp_ + 0x18, [120.0])
+    e.call(0x080B40FC, p_, fp_)
+    set_param(0x1C5, 0)
+    f = lambda o: e.rf(p_ + o, 1)[0]
+    return round(f(0x1FC)), round(f(0x204)), e.r32(p_ + 0x210), round(f(0x258))
+
+
+check("clip setup (stock): 16 segments of 24000 file / 24000 output frames, clip tempo 120; Stretch leaves it alone",
+      setup(0) == setup(100) == setup(0, 0) == (24000, 24000, 16, 120), (setup(0), setup(100), setup(0, 0)))
+
+
+def seg_start(stretch, k, count=None):
+    """real segment start 0x080b490c after the real setup: (slot file start, prefetch seek, output frames to the end)"""
+    seeks = []
+    e.stub(0x080A4624, lambda uc: seeks.append(uc.reg_read(UC_ARM_REG_R1)))
+    set_param(0x1C5, 0)
+    p_ = engine_pad()
+    e.w32(p_ + 0x24, vstream)
+    e.w32(p_ + 0xB80, 16)
+    e.mu.mem_write(p_ + 0x218, struct.pack("<qq", 3840, 960))
+    e.mu.mem_write(p_ + 0x1F5, b"\x01")
+    fp_ = e.new(0x40)
+    e.wf(fp_ + 0x18, [120.0])
+    e.call(0x080B40FC, p_, fp_)
+    set_param(0x1C5, stretch)
+    del seeks[:]
+    slot = e.call(0x080B490C, p_, e.new(0x400), 0, k, stack=(fp_, 0, 0))
+    del e.stubs[0x080A4624]
+    base = p_ + 0x30 + 0x70 * slot
+    r = (struct.unpack("<q", e.mu.mem_read(base + 8, 8))[0], seeks, e.r32(base + 0x28))
+    set_param(0x1C5, 0)
+    return r
+
+
+check("segment start (real 0x080b490c), Stretch 0: segment 3 at 72000, prefetch 71992, 23744 output frames",
+      seg_start(0, 3) == (72000, [71992], 23744), seg_start(0, 3))
+check("segment start, Stretch +100 %: segment 3 at 144000 (double speed), same output length",
+      seg_start(100, 3) == (144000, [143992], 23744), seg_start(100, 3))
+check("segment start, Stretch -100 %: segment 3 at 36000 (half speed); +50 %: 108000",
+      seg_start(-100, 3)[0] == 36000 and seg_start(50, 3)[0] == 108000, (seg_start(-100, 3), seg_start(50, 3)))
 
 # --- machine modes after the voice
 for name in ("SP1200", "SP-12", "S950", "MPC60", "SP Raw"):

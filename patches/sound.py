@@ -15,9 +15,6 @@ STORE_ADD = 0x0808951E
 HOOKS = [
     (0x080896F8, STORE_ADD, "pad_store_add"),
     (0x08089922, STORE_ADD, "pad_store_add"),
-    # stretch: the clip setup 0x080b40fc hands the clip's length in ticks (Auto / Beat Count) to the tempo conversion
-    (0x080B42A8, 0x0809F1F8, "clip_ticks_thunk"),
-    (0x080B44DA, 0x0809F1F8, "clip_ticks_thunk"),
     # Sync list + "1/32"
     (0x0806AB7E, 0x08069E7C, "sync_register"),
     # parameter pages: hide Play Len / Stretch when the clip is not synced (every caller of the page builder)
@@ -48,6 +45,9 @@ NEW = [P_FILT2, P_RES2, P_DRIVE]
 THUNKS = [
     (0x080B5F2E, "d6e99012", "clip_segments_thunk"),
     (0x080B611A, "d6e99012", "clip_segments_thunk"),
+    # stretch, live at every segment start (0x080b490c): file position = index x length x speed; last-segment test
+    (0x080B4A68, "27ee888a", "clip_pos_thunk"),
+    (0x080B49B4, "d4f84032", "clip_last_thunk"),
 ]
 
 EXCLUSIVE = {0x08076D8C}

@@ -5,8 +5,9 @@
  * 0x080a4624 (stream, pos)                   at 0x080b47d2, 0x080b4b4c -> clip_seek(stream, pos, pad)
  * Play length: `ldrd r1, r2, [r6, #0x240]` (0x080b5f2e, 0x080b611a; pad in r6, `add r2, r1; cmp` follow) ->
  *   r1 = pad[0x240], r2 = clip_segments(pad) - r1, everything else kept (flags are set by the cmp after).
- * Stretch: 0x0809f1f8 (out, &ticks, s0 tempo, s1) at 0x080b42a8 / 0x080b44da (clip setup, pad in sl) ->
- *   clip_ticks(pad, &ticks), then the stock call with r0-r3, s0, s1 as they were.
+ * Stretch (segment start 0x080b490c, pad in r4):
+ *   0x080b4a68 `vmul.f32 s16, s15, s16` -> s16 = s15 x s16 x clip_speed(pad); everything else kept
+ *   0x080b49b4 `ldr.w r3, [r4, #0x240]` -> r3 = clip_last_count(pad); everything else kept (flags: subs / cmp follow)
  */
     .syntax unified
     .thumb
@@ -49,17 +50,37 @@ clip_segments_thunk:
     pop     {r0, r3, ip, lr}
     bx      lr
 
-    .global clip_ticks_thunk
+    .global clip_pos_thunk
     .thumb_func
-    .type clip_ticks_thunk, %function
-clip_ticks_thunk:
+    .type clip_pos_thunk, %function
+clip_pos_thunk:
     push    {r0, r1, r2, r3, ip, lr}
-    vpush   {s0, s1}
-    mov     r0, sl
-    bl      clip_ticks
-    vpop    {s0, s1}
+    vpush   {s0-s15}
+    mov     r0, r4
+    bl      clip_speed
+    vmov    r0, s0
+    vpop    {s0-s15}
+    vmul.f32 s16, s15, s16
+    vpush   {s14}
+    vmov    s14, r0
+    vmul.f32 s16, s16, s14
+    vpop    {s14}
     pop     {r0, r1, r2, r3, ip, lr}
-    ldr     ip, =0x0809f1f9
-    bx      ip
+    bx      lr
+
+    .global clip_last_thunk
+    .thumb_func
+    .type clip_last_thunk, %function
+clip_last_thunk:
+    push    {r0, r1, r2, ip, lr}
+    sub     sp, sp, #4
+    vpush   {s0-s15}
+    mov     r0, r4
+    bl      clip_last_count
+    mov     r3, r0
+    vpop    {s0-s15}
+    add     sp, sp, #4
+    pop     {r0, r1, r2, ip, lr}
+    bx      lr
 
     .ltorg

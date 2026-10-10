@@ -501,3 +501,31 @@ Sync = Slice (0) / None (6): beide entfernen. Ob die UI die Seite beim Aendern v
 nicht geprueft (Stock-Beispiel Delay legt es nahe).
 Tests: Liste, Literal, echter Handler 0x080B6CE8 fuer alle 8 Sync-Werte (Ticks), Seite mit echtem Record und echter
 Entfernen-Funktion (synchron / 1/32 / Quant None / Sync None / Slice).
+
+## Hardware-Test pkK, Stretch sofort (Build pkL, 2026-10-10)
+
+pkK am Geraet: Stretch weiter ohne Wirkung; Shift "macht vermutlich etwas, wirkt verschluckt".
+Emulation des echten Clip-Setups 0x080B40FC (falsche Quelle: 384000 Frames, 48 kHz, 120 BPM, Sync 1/4): Stretch wirkt dort
+(0: 16 Segmente, je 24000 Datei- / 24000 Ausgangs-Frames, Pad+0x258 = 120 = Clip-Tempo; +100 %: 8 × 48000 / 24000, 60).
+Ursache: synchrone Clips fuehren das Setup beim Loop-Neustart nicht aus (0x080B5F4E: Pad+0x1F5 ≠ 0 → 0x080B630A); es
+laeuft nur bei Sync / Quant / Beat Count aus der UI (und Laden), und die Engine sieht Stretch nie.
+pkL: `pad_param_set` (Hook 0x0807D91A, Store-Set im Pad-Zweig von 0x0807D358): nach dem Speichern von Stretch die
+aktuelle Sync des Pads per 0x080937F4(0x24022978, row<<8|col, 0x76, Wert, 0, 0) an die Engine (wie eine Sync-Aenderung,
+Nachricht 0x39) → Setup sofort neu. Pad+0x258 (Clip-Tempo) folgt dem Stretch; ob die UI-Tempo-Anzeige daraus liest: offen.
+Shift: wirkt nur auf die Lesepositionen, die Sync-Neuausrichtung sieht ihn nicht (kein Verschlucken im Code gefunden);
++s liest s ms weiter in der Datei → Transienten kommen s ms frueher.
+Tests: Setup-Emulation (0, ±100 %, Beat Count fest und Auto), Nachsenden (Adresse, Sync-Wert, andere Parameter nicht).
+
+## Hardware-Test pkL, Stretch am Segment-Start (Build pkM, 2026-10-10)
+
+pkL am Geraet: Stretch weiter ohne Wirkung. Emulation des echten Segment-Starts 0x080B490C nach echtem Setup:
+Segment k startet bei k × Pad+0x1FC (Slot+8 = 72000 fuer k = 3 bei 24000), Prefetch-Seek Start − 8, Slot+0x28 = 23744
+Ausgangs-Frames (24000 − 0x100). Mit Stretch im Setup (pkJ–pkL) verdoppelt sich die Position korrekt → das Modell stimmt;
+am Geraet wird das Setup fuer den laufenden Clip offenbar nicht neu gerechnet (auch nicht ueber das Nachsenden von Sync;
+Ursache nicht gefunden, nicht verifiziert).
+pkM: Setup-Eingriffe (0x080B42A8 / 0x080B44DA) und das Nachsenden (0x0807D91A) entfernt. Stattdessen live:
+- 0x080B4A68 `vmul.f32 s16, s15, s16` (Index × Segmentlaenge) → × Speed (`clip_pos_thunk`, Pad in r4)
+- Schleifengrenze (`clip_segments`): Anzahl / Speed, gerundet, dann Play Len
+- 0x080B49B4 `ldr.w r3, [r4, #0x240]` (Test "letztes Segment") → Anzahl / Speed (`clip_last_thunk`)
+Stretch ist damit stufenlos (nicht mehr auf Beats gerundet) und wirkt ab dem naechsten Segment.
+Tests: echter Segment-Start (0, ±100 %, +50 %), Schleifengrenze mit Stretch und Play Len, Letztes-Segment-Thunk.
