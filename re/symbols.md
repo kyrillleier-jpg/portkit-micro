@@ -421,3 +421,21 @@ dem Ende bleiben (Stille). Slicer-Pads (+0x254) und unbekannte Laenge: kein Shif
 Offen: Prefetch beim Umbruch an der Naht (gestreamte Dateien) springt nicht vor; ob es dort zu einem Aussetzer kommt,
 nur am Geraet pruefbar. Tests: Speicher-Stream mit echtem 0x080A4500 (Shift 0 = Stock, ±10 ms, Umbruch, Ende, Slices,
 Seek), Loop-Seite.
+
+## Abspiellaenge fuer Clips (Build pkH, 2026-10-10)
+
+Wunsch: Abspiellaenge 1/4 .. 32 Takte in Viertel-Takt-Schritten, Default = ganzer Clip.
+
+| Micro | Was | Befund | Status |
+|---|---|---|---|
+| 0x080B6CE8 | Klasse-B-Param-Handler (Nachricht 0x3A) | IDs ≤ 0xD5 per tbh, sonst nur 0x13F → neue IDs ignoriert | vermutet |
+| 0xB4 Beat Count → Pad+0xB80 | Liste Auto, 1..512 | | vermutet |
+| 0x76 Sync → Pad+0x220 (int64), Pad+0x1F5 | Tabelle 0x080C4F7C {1024, 4, 2, 1, 0.5, 0.25, 0} Beats × 960 Ticks: Slice 0xF0000, 1 bar 3840 … 1/16 240, None 0 | vermutet |
+| 0x080B40FC | Segment-Aufbau | synchron: Segmente = Clip-Ticks / Pad+0x220 → Pad+0x210, Pad+0x240 (+0x244), Laenge Pad+0x1FC | vermutet |
+| 0x080B5F2E / 0x080B611A | `ldrd r1, r2, [r6, #0x240]; add r2, r1; cmp` | naechstes Segment < Anzahl → weiter, sonst Ende (Loop: Segment 0, sonst Stop); 0x080B5F2E = synchroner Pfad | vermutet |
+
+Umsetzung: Parameter 0x1C4 "Play Len:" (Liste, 129 Eintraege: Full, 1/4, 1/2, 3/4, 1, 1 1/4 … 32; xml `pkplaylen`,
+Default 0 = Full) auf der Loop-Seite der Clip-Tabellen nach Shift. Thunk `clip_segments_thunk` an beiden Stellen: Anzahl
+= min(Anzahl, round(Viertel-Takte × 960 / Pad+0x220)), mindestens 1; nur mit Sync (Pad+0x1F5) und nicht Slice / Slicer.
+Genauigkeit = Sync-Einheit (bei Sync 1 bar nur ganze Takte). Pad-Record jetzt 63 von 64 Eintraegen.
+Tests: Liste, Defaults, Segmentgrenze bei Sync 1/4, 1/16, 1 bar, Rundung, laenger als Clip, Ausnahmen.

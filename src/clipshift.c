@@ -9,6 +9,14 @@
  * [(pos + shift) mod frames, ...), split at the file end; reads past the end stay as they were (silence). The seek gets
  * the same mapping. Slicer pads (pad +0x254 set) are left alone. Positions are file frames; 1 ms = 48 frames (files at
  * other rates shift by a little more or less than the shown ms).
+ *
+ * Play length for clip pads: Full (default, the whole clip) or 1/4 .. 32 bars in quarter-bar steps. Clip voices play
+ * segment by segment (re/symbols.md "Abspiellaenge"); when the next segment index reaches the clip's segment count
+ * (pad +0x240 + pad +0x244, compared at 0x080b5f2e / 0x080b611a) the clip loops back to segment 0 or stops. With Sync
+ * on (pad +0x1f5), a segment is one Sync unit: pad +0x220 = its length in ticks, 960 per beat (Sync list 0x76: 1 bar
+ * 3840, 1/2 1920, 1/4 960, 1/8 480, 1/16 240; "Slice" 0xf0000 is the slicer). The count is capped at the play length:
+ * quarter bars * 960 / unit, rounded, at least 1, so the length is exact down to the Sync unit (a quarter bar is one
+ * beat, 4/4). Sync None or Slice: no cap.
  */
 #include <stdint.h>
 
@@ -24,6 +32,12 @@ typedef int (*frames_fn)(void *stream);
 #define fw_frames ((frames_fn)FN(0x080a45ac))   /* frame count; 0x10000000 if the source does not know it */
 
 #define P_SHIFT        0x1c3
+#define P_PLAYLEN      0x1c4      /* list index: 0 = Full, q = q quarter bars (1 .. 128) */
+#define PAD_SEGMENTS   0x240      /* + 0x244: segment count */
+#define PAD_SYNCED     0x1f5
+#define PAD_UNIT_TICKS 0x220      /* int64 */
+#define TICKS_PER_BEAT 960
+#define SLICE_TICKS    0xf0000
 #define PAD_SLICED     0x254
 #define FRAMES_PER_MS  48
 #define UNKNOWN_FRAMES 0x10000000
@@ -109,4 +123,40 @@ void clip_seek(void *stream, int pos, const uint8_t *pad)
             pos -= total;
     }
     fw_seek(stream, pos);
+}
+
+/* --- play length ------------------------------------------------------------------------------------------------- */
+const char *const playlen_names[129] = {
+    "Full", "1/4", "1/2", "3/4", "1", "1 1/4", "1 1/2", "1 3/4", "2", "2 1/4",
+    "2 1/2", "2 3/4", "3", "3 1/4", "3 1/2", "3 3/4", "4", "4 1/4", "4 1/2", "4 3/4",
+    "5", "5 1/4", "5 1/2", "5 3/4", "6", "6 1/4", "6 1/2", "6 3/4", "7", "7 1/4",
+    "7 1/2", "7 3/4", "8", "8 1/4", "8 1/2", "8 3/4", "9", "9 1/4", "9 1/2", "9 3/4",
+    "10", "10 1/4", "10 1/2", "10 3/4", "11", "11 1/4", "11 1/2", "11 3/4", "12", "12 1/4",
+    "12 1/2", "12 3/4", "13", "13 1/4", "13 1/2", "13 3/4", "14", "14 1/4", "14 1/2", "14 3/4",
+    "15", "15 1/4", "15 1/2", "15 3/4", "16", "16 1/4", "16 1/2", "16 3/4", "17", "17 1/4",
+    "17 1/2", "17 3/4", "18", "18 1/4", "18 1/2", "18 3/4", "19", "19 1/4", "19 1/2", "19 3/4",
+    "20", "20 1/4", "20 1/2", "20 3/4", "21", "21 1/4", "21 1/2", "21 3/4", "22", "22 1/4",
+    "22 1/2", "22 3/4", "23", "23 1/4", "23 1/2", "23 3/4", "24", "24 1/4", "24 1/2", "24 3/4",
+    "25", "25 1/4", "25 1/2", "25 3/4", "26", "26 1/4", "26 1/2", "26 3/4", "27", "27 1/4",
+    "27 1/2", "27 3/4", "28", "28 1/4", "28 1/2", "28 3/4", "29", "29 1/4", "29 1/2", "29 3/4",
+    "30", "30 1/4", "30 1/2", "30 3/4", "31", "31 1/4", "31 1/2", "31 3/4", "32"
+};
+
+/* thunk (clip_segments_thunk): replaces `ldrd r1, r2, [r6, #0x240]` before `add r2, r1`; returns the segment count to
+   use (pad = r6) */
+int clip_segments(const uint8_t *pad)
+{
+    int count = *(const int32_t *)(pad + PAD_SEGMENTS) + *(const int32_t *)(pad + PAD_SEGMENTS + 4);
+    if (pad[PAD_SLICED])
+        return count;
+    if (!pad[PAD_SYNCED] || count < 1)
+        return count;
+    int q = (int)pad_setting(pad, P_PLAYLEN);
+    int32_t unit = *(const int32_t *)(pad + PAD_UNIT_TICKS);
+    if (q <= 0 || q > 128 || unit <= 0 || unit >= SLICE_TICKS || *(const int32_t *)(pad + PAD_UNIT_TICKS + 4))
+        return count;
+    int limit = (q * TICKS_PER_BEAT + unit / 2) / unit;
+    if (limit < 1)
+        limit = 1;
+    return limit < count ? limit : count;
 }

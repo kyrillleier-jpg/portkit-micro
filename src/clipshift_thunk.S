@@ -3,6 +3,8 @@
  * 0x080a4500 (stream, dst, n, pos, [sp] ch)  at 0x080b5630, 0x080b5720 -> clip_read1(..., ch, pad)
  * 0x080a44c8 (stream, l, r, n, [sp] pos)     at 0x080b567e, 0x080b56f2 -> clip_read2(..., pos, pad)
  * 0x080a4624 (stream, pos)                   at 0x080b47d2, 0x080b4b4c -> clip_seek(stream, pos, pad)
+ * Play length: `ldrd r1, r2, [r6, #0x240]` (0x080b5f2e, 0x080b611a; pad in r6, `add r2, r1; cmp` follow) ->
+ *   r1 = pad[0x240], r2 = clip_segments(pad) - r1, everything else kept (flags are set by the cmp after).
  */
     .syntax unified
     .thumb
@@ -32,3 +34,15 @@
 clip_seek_thunk:
     mov     r2, r4
     b.w     clip_seek
+
+    .global clip_segments_thunk
+    .thumb_func
+    .type clip_segments_thunk, %function
+clip_segments_thunk:
+    push    {r0, r3, ip, lr}
+    mov     r0, r6
+    bl      clip_segments
+    ldr     r1, [r6, #0x240]
+    sub     r2, r0, r1
+    pop     {r0, r3, ip, lr}
+    bx      lr

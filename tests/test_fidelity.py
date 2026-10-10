@@ -127,8 +127,15 @@ e = Emu()
 seen = {}
 
 
+lists = {}
+
+
 def fake_register(uc):
     sp = uc.reg_read(UC_ARM_REG_SP)
+    lists[uc.reg_read(UC_ARM_REG_R1)] = (e.cstr(uc.reg_read(UC_ARM_REG_R2)), uc.reg_read(UC_ARM_REG_R3), e.r32(sp),
+                                         e.cstr(e.r32(sp + 4)))
+    if uc.reg_read(UC_ARM_REG_R1) != P_INTERP:
+        return
     seen.update(param=uc.reg_read(UC_ARM_REG_R1), label=uc.reg_read(UC_ARM_REG_R2), names=uc.reg_read(UC_ARM_REG_R3),
                 count=e.r32(sp), xml=e.r32(sp + 4))
 
@@ -158,6 +165,11 @@ check("label 'Fidelity:', xml name stays 'interpqual'",
 check("new knobs registered: Filter 2 (bipolar), Res 2, Drive",
       knobs == [(0x1C0, 9, "Filter 2:", -1000, 1000, "pkfilt2"), (0x1C1, 8, "Res 2:", 0, 1000, "pkres2"),
                 (0x1C2, 8, "Drive:", 0, 1000, "pkdrive"), (0x1C3, 1, "Shift ms:", -100, 100, "pkshift")], knobs)
+pl = lists.get(0x1C4)
+pl_names = [e.cstr(e.r32(pl[1] + 4 * k)) for k in range(pl[2])] if pl else []
+check("Play Len list: Full, 1/4 .. 32 bars in quarter bars, xml pkplaylen",
+      pl and pl[0] == "Play Len:" and pl[3] == "pkplaylen" and len(pl_names) == 129 and pl_names[:6] ==
+      ["Full", "1/4", "1/2", "3/4", "1", "1 1/4"] and pl_names[-1] == "32" and pl_names[8] == "2", pl_names[:10])
 del e.stubs[0x08069E7C]
 del e.stubs[0x08069ED4]
 
@@ -195,7 +207,8 @@ e.mu.mem_write(typ3, b"\x03")
 e.call(0x08089FC4, rec3, typ3)
 ids3, cnt3, cap3 = store_ids(rec3)
 check("pad records (type 0x45 and 3): Filter 2 = 0, Res 2 = 500, Drive = 0, within capacity",
-      all(d.get(0x1C0) == 0 and d.get(0x1C1) == 500 and d.get(0x1C2) == 0 and d.get(0x1C3) == 0 for d in (ids45, ids3))
+      all(d.get(0x1C0) == 0 and d.get(0x1C1) == 500 and d.get(0x1C2) == 0 and d.get(0x1C3) == 0 and d.get(0x1C4) == 0
+          for d in (ids45, ids3))
       and cnt3 <= cap3 and cnt45 <= cap45 and 0xAA in ids3, (cnt45, cap45, cnt3, cap3))
 
 
@@ -441,8 +454,39 @@ del e.stubs[0x080A4624]
 check("Shift: segment prefetch seek follows (wrapped)", seeks == [472, 580], seeks)
 set_param(0x1C3, 0)
 clip_loop = [struct.unpack_from("<6H", IMG, t + 2 * 0x5A - 0x08040000) for t in (0x080C6A1C, 0x080C6C38)]
-check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift",
-      all(m == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0) for m in clip_loop), clip_loop)
+check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len",
+      all(m == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4) for m in clip_loop), clip_loop)
+
+
+def segments(q, count, extra, unit, synced=1, sliced=0):
+    p = engine_pad()
+    e.w32(p + 0x240, count)
+    e.w32(p + 0x244, extra)
+    e.w32(p + 0x220, unit)
+    e.w32(p + 0x224, 0)
+    e.mu.mem_write(p + 0x1F5, bytes([synced]))
+    e.mu.mem_write(p + 0x254, bytes([sliced]))
+    set_param(0x1C4, q)
+    e.call(SYM["clip_segments_thunk"], 0x11, 0x22, 0x33, 0x44, regs=[(UC_ARM_REG_R6, p)])
+    r = [e.mu.reg_read(x) for x in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
+    set_param(0x1C4, 0)
+    return (r[1] + r[2]) & 0xFFFFFFFF, r, count          # as the firmware's `add r2, r1`
+
+
+# a 4-bar clip at Sync 1/4: 16 segments of 960 ticks; the stock sum is +0x240 + +0x244
+n, r, c = segments(0, 16, 0, 960)
+check("Play Len Full: segment count unchanged; thunk keeps r0 / r3, r1 = +0x240", n == 16 and r[0] == 0x11 and
+      r[3] == 0x44 and r[1] == 16, r)
+check("Play Len 1 bar at Sync 1/4: 4 segments; 1/4: 1; 2 3/4: 11",
+      segments(4, 16, 0, 960)[0] == 4 and segments(1, 16, 0, 960)[0] == 1 and segments(11, 16, 0, 960)[0] == 11)
+check("Play Len 1 bar at Sync 1/16 (64 segments): 16; at Sync 1 bar (4 segments): 1",
+      segments(4, 64, 0, 240)[0] == 16 and segments(4, 4, 0, 3840)[0] == 1)
+check("Play Len 1 1/2 bars at Sync 1 bar: rounds to whole units (2)", segments(6, 4, 0, 3840)[0] == 2)
+check("Play Len longer than the clip (8 bars of 4): full length", segments(32, 16, 0, 960)[0] == 16)
+check("Play Len with +0x244 part (count 15 + 1): 1 bar = 4", segments(4, 15, 1, 960)[0] == 4)
+check("Play Len unchanged: sliced pad, Sync None (not synced), Sync Slice",
+      segments(4, 16, 0, 960, sliced=1)[0] == 16 and segments(4, 16, 0, 960, synced=0)[0] == 16
+      and segments(4, 16, 0, 0xF0000)[0] == 16)
 
 # --- machine modes after the voice
 for name in ("SP1200", "SP-12", "S950", "MPC60", "SP Raw"):

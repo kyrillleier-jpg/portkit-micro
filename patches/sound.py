@@ -8,7 +8,7 @@ from thumb import ROOT, bl, symbols
 
 sym = symbols(os.path.join(ROOT, "out", "cave.elf"))
 
-P_FILT2, P_RES2, P_DRIVE, P_SHIFT = 0x1C0, 0x1C1, 0x1C2, 0x1C3
+P_FILT2, P_RES2, P_DRIVE, P_SHIFT, P_PLAYLEN = 0x1C0, 0x1C1, 0x1C2, 0x1C3, 0x1C4
 STORE_ADD = 0x0808951E
 
 # pad record init 0x08089548: the two pad blocks' "add Filter (0xaa)" -> add it, then the new parameters
@@ -31,7 +31,13 @@ MAIN_PAGES = [0x080C6A1C, 0x080C6C38, 0x080C6EEC, 0x080C7108, 0x080C76C0, 0x080C
 MAIN = [0x04, 0x3F, 0xAA, 0x11, 0x45]
 NEW = [P_FILT2, P_RES2, P_DRIVE]
 
-# Clip loop page (page 2): Loop Mode, Beat Count, Quant Size, Sync -> + Shift
+# play length: the segment-count loads before "next segment < count" in the clip voice 0x080b5aa8 (pad in r6)
+THUNKS = [
+    (0x080B5F2E, "d6e99012", "clip_segments_thunk"),
+    (0x080B611A, "d6e99012", "clip_segments_thunk"),
+]
+
+# Clip loop page (page 2): Loop Mode, Beat Count, Quant Size, Sync -> + Shift, Play Len
 CLIP_TABLES = [0x080C6A1C, 0x080C6C38]
 LOOP_PAGE = 2 * 0x5A
 LOOP = [0x6F, 0xB4, 0x2A, 0x76]
@@ -39,5 +45,6 @@ LOOP = [0x6F, 0xB4, 0x2A, 0x76]
 PATCHES = (
     [(at, bl(at, stock), bl(at, sym[name])) for at, stock, name in HOOKS]
     + [(t, struct.pack("<8H", *MAIN, 0, 0, 0), struct.pack("<8H", *MAIN, *NEW)) for t in MAIN_PAGES]
-    + [(t + LOOP_PAGE, struct.pack("<6H", *LOOP, 0, 0), struct.pack("<6H", *LOOP, P_SHIFT, 0)) for t in CLIP_TABLES]
+    + [(at, bytes.fromhex(old), bl(at, sym[name])) for at, old, name in THUNKS]
+    + [(t + LOOP_PAGE, struct.pack("<6H", *LOOP, 0, 0), struct.pack("<6H", *LOOP, P_SHIFT, P_PLAYLEN)) for t in CLIP_TABLES]
 )
