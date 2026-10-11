@@ -723,3 +723,20 @@ Umsetzung (`src/master.c`, `src/master_thunk.S`, `patches/master.py`):
 - Offen / nicht verifiziert: Kopfzeile der Seite (bleibt die der Settings-Seite), ob der Settings-Store mit dem Preset
   oder global gespeichert wird, Encoder-Schrittweite bei Release (Typ 1, 1 ms pro Raste), Pfeile auf 0x32 / 0x33 nicht
   belegt. Test: tests/test_master.py (21 Checks), test_fidelity.py (Registrierung, ID-Scan).
+
+## Display-Pfad (Renode-Simulation, 2026-10-11)
+
+| Adresse | Was | Beleg | Status |
+|---|---|---|---|
+| 0x24002E7C | LTDC-Handle (0x50001000): Panel 240 x 320 hochkant ueber RGB-Schnittstelle; zwei Ebenen ARGB1555 (Alpha-Bit 0 = transparent) ueber Hintergrund 0x141414 | Registerstand in der Simulation | durch Emulation bestaetigt |
+| 0x24009CBC | SPI3-Handle: nur die Init-Befehle des Panels (CASET/RASET/...), keine Pixel | Hook auf HAL_SPI_Transmit 0x0804DD94 | durch Emulation bestaetigt |
+| 0x24002F24 | DMA2D-Handle: L8-UI-Puffer (CLUT ARGB8888 bei 0x24000000) -> ARGB1555-Ebenenpuffer | Register | durch Emulation bestaetigt |
+| 0x24009E38 | SAI1-Block-A-Handle (48 kHz) | Handle-Inhalt | durch Emulation bestaetigt |
+
+Korrektur: UI-Koordinaten zaehlen y von unten. Das Panel {1,149,318,72} des Pads-Bildschirms (Abschnitt Pad-Seiten)
+liegt im Bild oben (y 19..91), nicht unten.
+
+Eingaben (Renode-Simulation, 2026-10-11): Tastenabfrage 0x08041A50 nur aus dem Engine-Block 0x08093E48 (laeuft nur mit
+Audio-DMA); Tastentabelle 0x24009DA4: HOME = PG3, TOOLS = PD4, LINKS = PC13, RECHTS = PB13, aktiv low (durch Emulation
+bestaetigt). pkX Tools-Seiten (Kompressor / Distortion, Pfeile, Standardwerte) in der Simulation angezeigt: durch
+Emulation bestaetigt, nicht am Geraet.
