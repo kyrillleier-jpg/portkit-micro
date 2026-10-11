@@ -740,3 +740,23 @@ Eingaben (Renode-Simulation, 2026-10-11): Tastenabfrage 0x08041A50 nur aus dem E
 Audio-DMA); Tastentabelle 0x24009DA4: HOME = PG3, TOOLS = PD4, LINKS = PC13, RECHTS = PB13, aktiv low (durch Emulation
 bestaetigt). pkX Tools-Seiten (Kompressor / Distortion, Pfeile, Standardwerte) in der Simulation angezeigt: durch
 Emulation bestaetigt, nicht am Geraet.
+
+## Kompressor-Typ SSL (Build pkY)
+
+Wunsch: zusaetzlicher Kompressor-Typ angelehnt an den SSL-Bus-Kompressor (Schalterwerte).
+
+| Adresse | Was | Beleg | Status |
+|---|---|---|---|
+| 0x0807E884 | App-Dispatcher, Befehl 0x6E: Aufruf des Regler-Handlers 0x0807D358(app, msg, id, wert, [sp]); Rueckgabe unbenutzt | Disassembly | vermutet |
+| 0x0807D3C4.. | Regler-Handler Code 0x40: Store-Set, bei manchen IDs settings.tml schreiben, Engine-Nachricht; kein Neuaufbau der Seite | Disassembly | vermutet |
+| Kompressor-Objekt +8 | naechster Knoten; der Stock-DSP ruft ihn am Ende (vtable +0xC, (Knoten, Engine)) | 0x080B9C0C | vermutet |
+
+Umsetzung (`src/master.c`): Comp Type 0x19D (Stock / SSL), Mix 0x19E (beide Typen, Dry-Kopie in 0x2406E000 /
+0x2406E800), SSL-Schalter Ratio 0x19F (2/4/10), Attack 0x17D (0,1/0,3/1/3/10/30 ms), Release 0x17F (0,1/0,3/0,6/1,2 s/
+Auto), Threshold und Gain gemeinsam. SSL-DSP: Feed-Forward, Stereo-gekoppelte Spitzenerkennung, Kennlinie in dB mit
+2-dB-Soft-Knee, Glaettung der Gain-Reduktion (Attack/Release), Auto = schnelle (0,1 s) und langsame Huellkurve
+(300 ms / 1,2 s), die tiefere gewinnt; Zustand 0x2406D580. Hook master_knob an 0x0807E884: Typwechsel auf der
+Kompressor-Seite baut die Seite neu auf (Regler je Typ). Defaults SSL: 2:1 / 30 ms / Auto. Test: test_master.py
+(Kennlinie 2/4/10:1 innerhalb 0,6 dB, Attack, Auto-Release, Mix, Seiten, Hook), Simulation: beide Seiten angezeigt.
+Gefunden beim Testen: exp2_fast ist nahe 1 nur auf ~2,5e-4 genau (Zeitkonstanten > 80 ms unmoeglich) -> Koeffizienten
+per Reihe; log2-Naeherung brauchte Exponent - 128.

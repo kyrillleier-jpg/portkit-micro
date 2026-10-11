@@ -11,7 +11,8 @@ sym = symbols(os.path.join(ROOT, "out", "cave.elf"))
 
 HOOKS = [
     (0x08089F78, 0x0808951E, "master_store_add"),   # settings store init 0x08089e04: last add (0x17b), then ours
-    (0x08097056, 0x080B9B04, "master_comp"),        # block driver: compressor (engine +0xfb38), settings stamped first
+    (0x08097056, 0x080B9B04, "master_comp"),        # block driver: compressor (engine +0xfb38): Stock / SSL, Mix
+    (0x0807E884, 0x0807D358, "master_knob"),        # dispatcher, command 0x6e (knob): Comp Type change -> page again
 ]
 
 THUNKS = [

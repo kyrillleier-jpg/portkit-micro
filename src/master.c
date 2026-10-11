@@ -12,6 +12,10 @@
  *   the compressor flag's load, so it runs whether the compressor is on or not). 2x oversampled (31-tap half-band
  *   up / down), shapers Soft (tanh) / Hard (clip) / Fold (triangle) / Tube (asymmetric tanh, DC blocked), Tone (one-pole
  *   low-pass, the stock cutoff curve), Mix (dry delayed by the filters' 15 samples), Level.
+ * - Comp Type (0x19d): Stock = the stock DSP above; SSL = an SSL-style bus compressor of ours (ssl_run, end of
+ *   file) with the SSL's switch values (ratio 0x19f, attack 0x17d, release 0x17f incl. Auto); threshold and Gain
+ *   shared, Mix (0x19e) for both. The Compressor page shows the type's knobs; master_knob (hook at the dispatcher's
+ *   knob call 0x0807e884) rebuilds it when the type changes.
  * - Settings: new ids 0x1a1-0x1a3, 0x1a5-0x1a9, 0x1ab, 0x1ac (none of them a constant anywhere in the stock code) in the settings store app +0x7fd0 (init 0x08089e04, capacity 64, 36
  *   stock entries; hooked at its last add 0x08089f78), registered next to Fidelity (filter.c). The engine never sees
  *   them (ids > 0x17a). Defaults = the stock compressor; distortion Off.
@@ -60,6 +64,11 @@ typedef float (*curve_fn)(float x);
 #define P_C_ATTACK 0x1a3
 #define P_C_REL    0x1a5
 #define P_C_GAIN   0x1a6
+#define P_C_TYPE   0x19d                                    /* Comp Type: Stock / SSL */
+#define P_C_MIX    0x19e                                    /* compressor dry / wet (parallel compression) */
+#define P_S_RATIO  0x19f                                    /* SSL: ratio switch 2 / 4 / 10 */
+#define P_S_ATTACK 0x17d                                    /* SSL: attack switch 0.1 .. 30 ms */
+#define P_S_REL    0x17f                                    /* SSL: release switch 0.1 .. 1.2 s, Auto */
 #define P_D_TYPE   0x1a7
 #define P_D_DRIVE  0x1a8
 #define P_D_TONE   0x1a9
@@ -73,18 +82,30 @@ typedef float (*curve_fn)(float x);
 static const char *const dist_names[] = {"Off", "Soft", "Hard", "Fold", "Tube"};
 enum { D_OFF, D_SOFT, D_HARD, D_FOLD, D_TUBE, D_TYPES };
 
-struct pdef { uint16_t id; uint8_t type; const char *label; int min, max, def; const char *xml; };
+static const char *const ctype_names[] = {"Stock", "SSL"};
+static const char *const sratio_names[] = {"2:1", "4:1", "10:1"};
+static const char *const sattack_names[] = {"0.1 ms", "0.3 ms", "1 ms", "3 ms", "10 ms", "30 ms"};
+static const char *const srel_names[] = {"0.1 s", "0.3 s", "0.6 s", "1.2 s", "Auto"};
+enum { C_STOCK, C_SSL, C_TYPES };
+
+/* type 0: a list (names, max = count) */
+struct pdef { uint16_t id; uint8_t type; const char *label; int min, max, def; const char *xml; const char *const *names; };
 static const struct pdef pdefs[] = {
-    {P_C_THRESH, 7, "Threshold:", -48000, 0, -4000, "pkcthresh"},    /* type 7: milli-dB, "-4.0 dB" */
-    {P_C_RATIO, 1, "Ratio:", 1, 20, 4, "pkcratio"},                  /* type 1: integer (x:1) */
-    {P_C_ATTACK, 1, "Attack ms:", 1, 200, 10, "pkcattack"},
-    {P_C_REL, 1, "Release ms:", 10, 2000, 250, "pkcrelease"},
-    {P_C_GAIN, 7, "Gain:", -12000, 24000, -4000, "pkcgain"},
-    {P_D_TYPE, 0, "Dist Type:", 0, D_TYPES, D_OFF, "pkdtype"},       /* list */
-    {P_D_DRIVE, 7, "Drive:", 0, 36000, 12000, "pkddrive"},
-    {P_D_TONE, 10, "Tone:", 0, 1000, 1000, "pkdtone"},               /* type 10: Hz, the stock cutoff curve */
-    {P_D_MIX, 8, "Mix:", 0, 1000, 1000, "pkdmix"},
-    {P_D_LEVEL, 7, "Level:", -24000, 12000, 0, "pkdlevel"},
+    {P_C_TYPE, 0, "Comp Type:", 0, C_TYPES, C_STOCK, "pkctype", ctype_names},
+    {P_C_THRESH, 7, "Threshold:", -48000, 0, -4000, "pkcthresh", 0},    /* type 7: milli-dB, "-4.0 dB" */
+    {P_C_RATIO, 1, "Ratio:", 1, 20, 4, "pkcratio", 0},                  /* type 1: integer (x:1) */
+    {P_C_ATTACK, 1, "Attack ms:", 1, 200, 10, "pkcattack", 0},
+    {P_C_REL, 1, "Release ms:", 10, 2000, 250, "pkcrelease", 0},
+    {P_C_GAIN, 7, "Gain:", -12000, 24000, -4000, "pkcgain", 0},
+    {P_C_MIX, 8, "Mix:", 0, 1000, 1000, "pkcmix", 0},
+    {P_S_RATIO, 0, "Ratio:", 0, 3, 0, "pksratio", sratio_names},      /* SSL defaults: mix glue 2:1, 30 ms, Auto */
+    {P_S_ATTACK, 0, "Attack:", 0, 6, 5, "pksattack", sattack_names},
+    {P_S_REL, 0, "Release:", 0, 5, 4, "pksrelease", srel_names},
+    {P_D_TYPE, 0, "Dist Type:", 0, D_TYPES, D_OFF, "pkdtype", dist_names},
+    {P_D_DRIVE, 7, "Drive:", 0, 36000, 12000, "pkddrive", 0},
+    {P_D_TONE, 10, "Tone:", 0, 1000, 1000, "pkdtone", 0},               /* type 10: Hz, the stock cutoff curve */
+    {P_D_MIX, 8, "Mix:", 0, 1000, 1000, "pkdmix", 0},
+    {P_D_LEVEL, 7, "Level:", -24000, 12000, 0, "pkdlevel", 0},
 };
 #define NPDEFS (int)(sizeof pdefs / sizeof pdefs[0])
 
@@ -94,7 +115,7 @@ void master_register(void *table)
     for (int k = 0; k < NPDEFS; k++) {
         const struct pdef *p = &pdefs[k];
         if (p->type == 0)
-            fw_register_list(table, p->id, p->label, dist_names, p->max, p->xml);
+            fw_register_list(table, p->id, p->label, p->names, p->max, p->xml);
         else
             fw_register_knob(table, p->id, p->type, p->label, p->min, p->max, p->xml);
     }
@@ -118,7 +139,9 @@ struct mstate {
 #define MMAGIC 0x4d535452u       /* "MSTR" */
 enum { PG_SET, PG_COMP, PG_DIST };
 
-static const uint16_t comp_page[] = {P_COMP_ON, P_C_THRESH, P_C_RATIO, P_C_ATTACK, P_C_REL, P_C_GAIN, 0};
+static const uint16_t comp_page[] = {P_COMP_ON, P_C_TYPE, P_C_THRESH, P_C_RATIO, P_C_ATTACK, P_C_REL, P_C_GAIN, P_C_MIX,
+                                     0};
+static const uint16_t ssl_page[] = {P_COMP_ON, P_C_TYPE, P_C_THRESH, P_S_RATIO, P_S_ATTACK, P_S_REL, P_C_GAIN, P_C_MIX, 0};
 static const uint16_t dist_page[] = {P_D_TYPE, P_D_DRIVE, P_D_TONE, P_D_MIX, P_D_LEVEL, 0};
 
 static unsigned page(void)
@@ -175,9 +198,23 @@ int master_page(void *app, const void *msg, uint8_t *list)
     if (code != PAGE_SET || pg == PG_SET)
         return 0;
     *(volatile uint32_t *)list = 0;
-    for (const uint16_t *p = pg == PG_COMP ? comp_page : dist_page; *p; p++)
+    const uint16_t *ids = pg == PG_DIST ? dist_page
+                        : fw_store_get((const uint8_t *)app + 0x7fd0u, P_C_TYPE) == C_SSL ? ssl_page : comp_page;
+    for (const uint16_t *p = ids; *p; p++)
         fw_list_add(list, *p, fw_store_get((const uint8_t *)app + 0x7fd0u, *p));
     return 1;
+}
+
+/* hook at the app dispatcher's call of the knob handler (command 0x6e, 0x0807e884 -> 0x0807d358): that, then, when
+   Comp Type has changed on the Compressor page, the page again (its knobs depend on the type) */
+typedef void (*knob_fn)(void *app, const void *msg, unsigned param, int value, int extra);
+#define fw_knob ((knob_fn)FN(0x0807d358))
+
+void master_knob(uint8_t *app, const void *msg, unsigned param, int value, int extra)
+{
+    fw_knob(app, msg, param, value, extra);
+    if (param == P_C_TYPE && app[SCREEN_ID] == SCR_TOOLS && page() == PG_COMP)
+        show(app, PG_COMP);
 }
 
 /* --- compressor: settings onto the live object, every block (hook at 0x08097056) ----------------------------------- */
@@ -187,18 +224,56 @@ int master_page(void *app, const void *msg, uint8_t *list)
 #define C_ATTACK  0x448
 #define C_RELEASE 0x44c
 
+typedef void *(*bus_fn)(void *engine, unsigned id);
+#define fw_bus ((bus_fn)FN(0x080a82b8))
+typedef void (*node_fn)(void *node, void *engine);
+
+static void ssl_run(void *bus);
+#define DRY_L ((float *)0x2406e000u)                     /* dry copy for Mix: 2 x 512 floats (patch RAM, free) */
+#define DRY_R ((float *)0x2406e800u)
+
+/* Comp Type Stock: the stock DSP with our settings; SSL: ours (ssl_run) on the same bus, then the node the stock DSP
+   would hand on to (object +8, vtable +0xc). Mix (both): dry / wet. */
 void master_comp(uint8_t *comp, void *engine)
 {
-    int ratio = fw_store_get(SETTINGS, P_C_RATIO);
-    if (ratio >= 1) {                                    /* our entries are there (0 = missing: stock values stay) */
-        int att = fw_store_get(SETTINGS, P_C_ATTACK), rel = fw_store_get(SETTINGS, P_C_REL);
-        *(volatile float *)(comp + C_THRESH) = (float)fw_store_get(SETTINGS, P_C_THRESH) * 0.001f;
-        *(volatile float *)(comp + C_RATIO) = (float)(ratio > 20 ? 20 : ratio);
-        *(volatile float *)(comp + C_MAKEUP) = (float)fw_store_get(SETTINGS, P_C_GAIN) * 0.001f;
-        *(volatile int32_t *)(comp + C_ATTACK) = (att < 1 ? 1 : att > 200 ? 200 : att) * SR_MS;
-        *(volatile int32_t *)(comp + C_RELEASE) = (rel < 10 ? 10 : rel > 2000 ? 2000 : rel) * SR_MS;
+    void *bus = fw_bus(engine, *(const uint16_t *)(comp + 0x1e));
+    int mix = fw_store_get(SETTINGS, P_C_MIX);
+    int silent = *((const uint8_t *)bus + 0x10);
+    int n = fw_frames(bus);
+    float *l = 0, *r = 0;
+    int dry = mix >= 0 && mix < 1000 && !silent && n > 0 && n <= 512;
+    if (dry) {
+        fw_planes(bus, &l, &r);
+        for (int k = 0; k < n; k++) {
+            DRY_L[k] = l[k];
+            DRY_R[k] = r ? r[k] : 0.0f;
+        }
     }
-    fw_comp(comp, engine);
+    if (fw_store_get(SETTINGS, P_C_TYPE) == C_SSL) {
+        ssl_run(bus);
+        void *child = *(void **)(comp + 8);
+        if (child)
+            ((node_fn)(*(uint32_t **)child)[3])(child, engine);
+    } else {
+        int ratio = fw_store_get(SETTINGS, P_C_RATIO);
+        if (ratio >= 1) {                                /* our entries are there (0 = missing: stock values stay) */
+            int att = fw_store_get(SETTINGS, P_C_ATTACK), rel = fw_store_get(SETTINGS, P_C_REL);
+            *(volatile float *)(comp + C_THRESH) = (float)fw_store_get(SETTINGS, P_C_THRESH) * 0.001f;
+            *(volatile float *)(comp + C_RATIO) = (float)(ratio > 20 ? 20 : ratio);
+            *(volatile float *)(comp + C_MAKEUP) = (float)fw_store_get(SETTINGS, P_C_GAIN) * 0.001f;
+            *(volatile int32_t *)(comp + C_ATTACK) = (att < 1 ? 1 : att > 200 ? 200 : att) * SR_MS;
+            *(volatile int32_t *)(comp + C_RELEASE) = (rel < 10 ? 10 : rel > 2000 ? 2000 : rel) * SR_MS;
+        }
+        fw_comp(comp, engine);
+    }
+    if (dry) {
+        float w = (float)mix * 0.001f;
+        for (int k = 0; k < n; k++) {
+            l[k] = DRY_L[k] + w * (l[k] - DRY_L[k]);
+            if (r && r != l)
+                r[k] = DRY_R[k] + w * (r[k] - DRY_R[k]);
+        }
+    }
 }
 
 /* --- distortion ---------------------------------------------------------------------------------------------------- */
@@ -361,4 +436,104 @@ void master_dist(void *bus0)
     d->drive = drive;
     d->mix = mix;
     d->level = level;
+}
+
+/* --- SSL-style bus compressor ------------------------------------------------------------------------------------- */
+/* Feed-forward VCA design: stereo-linked peak detector (max of |L|, |R|) in dB, static curve with a 2 dB soft knee,
+   the gain reduction smoothed with the attack / release switch (decoupled one-pole, in dB). Auto release: a fast
+   (0.1 s) and a slow path (attack 300 ms, release 1.2 s); the deeper reduction wins, so short peaks recover fast and
+   sustained compression holds. Switch values as on the SSL bus compressor; threshold and makeup (Gain) continuous. */
+static const float ssl_ratio[] = {2.0f, 4.0f, 10.0f};
+static const float ssl_attack_s[] = {0.0001f, 0.0003f, 0.001f, 0.003f, 0.01f, 0.03f};
+static const float ssl_release_s[] = {0.1f, 0.3f, 0.6f, 1.2f};
+#define SSL_AUTO   4
+#define SSL_KNEE   2.0f
+struct sslst { uint32_t magic; float gf, gs; };
+#define SST ((struct sslst *)0x2406d580u)
+#define SMAGIC 0x53534c21u       /* "SSL!" */
+
+static inline __attribute__((always_inline)) float log2_fast(float x)
+{
+    union { float f; uint32_t u; } v = {x};
+    float e = (float)((int)(v.u >> 23) - 128);              /* the polynomial maps m in [1, 2) to [1, 2) */
+    v.u = (v.u & 0x7fffffu) | 0x3f800000u;
+    float m = v.f;
+    return e + (-0.34484843f * m + 2.02466578f) * m - 0.67487759f;
+}
+
+/* one-pole: e^(-d), d = 1 / (t fs) <= 0.21 here; series, as exp2_fast is only good to ~2.5e-4 near 1, which would cap
+   every time constant at ~80 ms */
+static float coef(float seconds)
+{
+    float d = 1.0f / (seconds * FS);
+    return 1.0f - d * (1.0f - d * (0.5f - d * (1.0f / 6.0f - d * (1.0f / 24.0f))));
+}
+
+static int idx(unsigned param, int count, int def)
+{
+    int v = fw_store_get(SETTINGS, param);
+    return v >= 0 && v < count ? v : def;
+}
+
+static void ssl_run(void *bus)
+{
+    struct sslst *s = SST;
+    if (s->magic != SMAGIC) {
+        s->gf = s->gs = 0.0f;
+        s->magic = SMAGIC;
+    }
+    int n = fw_frames(bus);
+    if (n <= 0 || n > 512)
+        return;
+    float thr = (float)fw_store_get(SETTINGS, P_C_THRESH) * 0.001f;
+    float slope = 1.0f / ssl_ratio[idx(P_S_RATIO, 3, 0)] - 1.0f;          /* gain change per dB over: 1/R - 1 */
+    float makeup = (float)fw_store_get(SETTINGS, P_C_GAIN) * 0.001f;
+    int rel = idx(P_S_REL, 5, SSL_AUTO);
+    float aa = coef(ssl_attack_s[idx(P_S_ATTACK, 6, 5)]);
+    float ar = coef(rel == SSL_AUTO ? 0.1f : ssl_release_s[rel]);
+    float sa = coef(0.3f), sr = coef(1.2f);
+    float gf = s->gf, gs = s->gs;
+    if (*((const uint8_t *)bus + 0x10)) {                 /* silent: let the reduction recover, signal untouched */
+        for (int k = 0; k < n; k++) {
+            gf *= ar;
+            gs *= sr;
+        }
+        s->gf = gf;
+        s->gs = gs;
+        return;
+    }
+    float *l, *r;
+    fw_planes(bus, &l, &r);
+    if (!l)
+        return;
+    if (r == l)
+        r = 0;
+    for (int k = 0; k < n; k++) {
+        float x = l[k] < 0.0f ? -l[k] : l[k];
+        if (r) {
+            float y = r[k] < 0.0f ? -r[k] : r[k];
+            x = y > x ? y : x;
+        }
+        float over = (x > 1e-6f ? 6.0206f * log2_fast(x) : -120.0f) - thr;
+        float gc;
+        if (over <= -0.5f * SSL_KNEE)
+            gc = 0.0f;
+        else if (over < 0.5f * SSL_KNEE) {
+            float t = over + 0.5f * SSL_KNEE;
+            gc = slope * t * t * (0.5f / SSL_KNEE);
+        } else
+            gc = slope * over;
+        gf = gc < gf ? aa * gf + (1.0f - aa) * gc : ar * gf + (1.0f - ar) * gc;
+        float g = gf;
+        if (rel == SSL_AUTO) {
+            gs = gc < gs ? sa * gs + (1.0f - sa) * gc : sr * gs + (1.0f - sr) * gc;
+            g = gs < gf ? gs : gf;
+        }
+        float lin = exp2_fast((g + makeup) * (1.0f / 6.0206f));
+        l[k] *= lin;
+        if (r)
+            r[k] *= lin;
+    }
+    s->gf = gf;
+    s->gs = gs;
 }

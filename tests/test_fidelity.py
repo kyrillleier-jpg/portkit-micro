@@ -169,8 +169,9 @@ check("new knobs registered: Filter 2 (bipolar), Res 2, Drive",
                 (0x1C6, 1, "Stretch %:", -100, 100, "pkstretch"),
                 (0x1C8, 8, "FX3 Send:", 0, 1000, "fx3send")], knobs)
 check("master section knobs registered after them (master.c; Dist Type is a list)",
-      [k[0] for k in knobs[6:]] == [0x1A1, 0x1A2, 0x1A3, 0x1A5, 0x1A6, 0x1A8, 0x1A9, 0x1AB, 0x1AC]
-      and lists.get(0x1A7, ("",))[0] == "Dist Type:", knobs[6:])
+      [k[0] for k in knobs[6:]] == [0x1A1, 0x1A2, 0x1A3, 0x1A5, 0x1A6, 0x19E, 0x1A8, 0x1A9, 0x1AB, 0x1AC]
+      and [lists.get(i, ("",))[0] for i in (0x19D, 0x19F, 0x17D, 0x17F, 0x1A7)]
+      == ["Comp Type:", "Ratio:", "Attack:", "Release:", "Dist Type:"], knobs[6:])
 pl = lists.get(0x1C4)
 pl_names = [e.cstr(e.r32(pl[1] + 4 * k)) for k in range(pl[2])] if pl else []
 check("Play Len list: Full, 1/4 .. 32 bars in quarter bars, xml pkplaylen",
@@ -651,11 +652,12 @@ from capstone import CS_ARCH_ARM, CS_MODE_MCLASS, CS_MODE_THUMB, Cs  # noqa: E40
 _md = Cs(CS_ARCH_ARM, CS_MODE_THUMB | CS_MODE_MCLASS)
 _md.skipdata = True
 _ours = {f"#{v:#x}" for v in (0x1C0, 0x1C1, 0x1C2, 0x1C3, 0x1C4, 0x1C6, 0x1C7, 0x1C8, *range(0x191, 0x19C),
-                               0x1A1, 0x1A2, 0x1A3, *range(0x1A5, 0x1AA), 0x1AB, 0x1AC)}
+                               0x1A1, 0x1A2, 0x1A3, *range(0x1A5, 0x1AA), 0x1AB, 0x1AC,
+                               0x19D, 0x19E, 0x19F, 0x17D, 0x17F)}
 _uses = [hex(i.address) for i in _md.disasm(IMG[:0x080BC000 - 0x08040000], 0x08040000)   # code, not the data after it
          if i.mnemonic in ("movs", "movw", "mov.w", "cmp", "cmp.w") and "sp" not in i.op_str
          and any(i.op_str.endswith(v) for v in _ours)]
-check("new parameter ids 0x1c0-0x1c4, 0x1c6-0x1c8, 0x191-0x19b, 0x1a1-0x1a3, 0x1a5-0x1a9, 0x1ab, 0x1ac: no immediate use in the stock code", not _uses, _uses)
+check("new parameter ids 0x1c0-0x1c4, 0x1c6-0x1c8, 0x191-0x19b, 0x1a1-0x1a3, 0x1a5-0x1a9, 0x1ab, 0x1ac, 0x19d-0x19f, 0x17d, 0x17f: no immediate use in the stock code", not _uses, _uses)
 
 # --- smooth time stretch (WSOLA, clip_render in place of 0x080b55ac), real stream reads on an in-memory mono stream
 SR = 48000

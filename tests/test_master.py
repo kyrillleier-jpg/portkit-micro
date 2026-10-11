@@ -48,8 +48,8 @@ def put(pid, v):
 e.stub(0x080442F6, lambda uc: None)                       # its last call (not about the store)
 e.call(0x08089E04, SET)
 cnt, ids = store_ids(SET)
-check("settings store: 36 stock entries + 10 new (46 of 64), 0x17b (the hooked add) still there",
-      cnt == 46 and 0x17B in ids and 0x96 in ids, cnt)
+check("settings store: 36 stock entries + 15 new (51 of 64), 0x17b (the hooked add) still there",
+      cnt == 51 and 0x17B in ids and 0x96 in ids, cnt)
 check("new entries with defaults: compressor = stock (-4 dB, 4:1, 10 ms, 250 ms, -4 dB), distortion Off / 12 dB / "
       "Tone open / Mix 100 % / Level 0 dB",
       [ids.get(COMP[k]) for k in ("thresh", "ratio", "attack", "release", "gain")] == [-4000, 4, 10, 250, -4000]
@@ -77,9 +77,27 @@ e.w32(lst, 3)                                              # the stock page's en
 r = e.call(SYM["master_page"], APP, msg, lst)
 n = e.r32(lst)
 entries = [(e.r16(lst + 4 + 12 * k), struct.unpack("<i", e.mu.mem_read(lst + 0xC + 12 * k, 4))[0]) for k in range(n)]
-check("Compressor page: Compressor (0x96), Threshold, Ratio, Attack, Release, Gain with their values",
-      r == 1 and entries == [(0x96, ids[0x96]), (0x1A1, -4000), (0x1A2, 4), (0x1A3, 10), (0x1A5, 250), (0x1A6, -4000)],
-      entries)
+check("Compressor page (Stock): Compressor, Comp Type, Threshold, Ratio, Attack, Release, Gain, Mix with their values",
+      r == 1 and entries == [(0x96, ids[0x96]), (0x19D, 0), (0x1A1, -4000), (0x1A2, 4), (0x1A3, 10), (0x1A5, 250),
+                             (0x1A6, -4000), (0x19E, 1000)], entries)
+check("SSL defaults: mix glue 2:1 (0), attack 30 ms (5), release Auto (4)",
+      (ids.get(0x19F), ids.get(0x17D), ids.get(0x17F)) == (0, 5, 4), (ids.get(0x19F), ids.get(0x17D), ids.get(0x17F)))
+put(0x19D, 1)
+e.w32(lst, 0)
+e.call(SYM["master_page"], APP, msg, lst)
+check("Compressor page (SSL): Comp Type, Threshold, SSL Ratio / Attack / Release switches, Gain, Mix",
+      [e.r16(lst + 4 + 12 * k) for k in range(e.r32(lst))] == [0x96, 0x19D, 0x1A1, 0x19F, 0x17D, 0x17F, 0x1A6, 0x19E])
+# knob hook: Comp Type changed on the Compressor page -> page rebuilt; other knobs / pages: just the stock handler
+knobs = []
+e.stub(0x0807D358, lambda uc: knobs.append((uc.reg_read(UC_ARM_REG_R2), uc.reg_read(UC_ARM_REG_R3))))
+screens.clear()
+e.call(SYM["master_knob"], APP, msg, 0x19D, 0, stack=(0,))
+type_rebuild = screens == [0x25] and r8(MS + 4) == 1
+screens.clear()
+e.call(SYM["master_knob"], APP, msg, 0x1A1, (-1000) & 0xFFFFFFFF, stack=(0,))
+check("knob hook: stock handler always; Comp Type change on the Compressor page rebuilds it (screen 0x25), Threshold not",
+      type_rebuild and not screens and knobs == [(0x19D, 0), (0x1A1, (-1000) & 0xFFFFFFFF)], (knobs, screens))
+put(0x19D, 0)
 
 screens.clear()
 e.call(SYM["master_right"], APP)
@@ -108,28 +126,130 @@ w8(MS + 4, 0)
 check("right arrow table: entry for screen 0x25 -> tools_right (Thumb)",
       struct.unpack_from("<I", IMG, 0x08083800 + 4 * (0x25 - 2) - 0x08040000)[0] == SYM["tools_right"] | 1)
 
-# --- compressor: settings stamped onto the object before the stock DSP
+# --- compressor: engine with bus 0, the object (bus index +0x1e = 0, no next node)
+N = 128
+engine = e.new(0x16000)
+bus0 = engine + 0x150E4
+e.call(0x080A310C, bus0, N)
 comp = e.new(0x700)
+
+def fill(values):
+    e.call(0x080A31D4, bus0)
+    e.call(0x080A31C8, bus0, N)
+    il, ir = e.new(4), e.new(4)
+    e.call(0x080A32D4, bus0, il, ir)
+    e.wf(e.r32(il), values)
+    e.wf(e.r32(ir), values)
+
+def planes():
+    return e.rf(e.r32(bus0 + 8), N), e.rf(e.r32(bus0 + 0xC), N)
+
 seen = []
-def _comp(uc):
+def _comp(uc):                                             # stock DSP stub: records the object, wet = silence
     c = uc.reg_read(UC_ARM_REG_R0)
     seen.append((uc.reg_read(UC_ARM_REG_R1),
                  struct.unpack("<fffI", uc.mem_read(c + 0x428, 12) + uc.mem_read(c + 0x448, 4)),
                  struct.unpack("<I", uc.mem_read(c + 0x44C, 4))[0]))
+    for off in (8, 0xC):
+        uc.mem_write(struct.unpack("<I", uc.mem_read(bus0 + off, 4))[0], b"\0" * 4 * N)
 e.stub(0x080B9B04, _comp)
 put(COMP["thresh"], -18000)
 put(COMP["ratio"], 6)
 put(COMP["attack"], 30)
 put(COMP["release"], 600)
 put(COMP["gain"], 6500)
-e.call(SYM["master_comp"], comp, 0x1234)
+fill([0.5] * N)
+e.call(SYM["master_comp"], comp, engine)
 (eng, (th, ra, mk, at), rel), = seen
-check("compressor: -18 dB, 6:1, makeup +6.5 dB, attack 30 ms = 1440, release 600 ms = 28800 samples; engine passed on",
-      eng == 0x1234 and abs(th + 18) < 1e-4 and ra == 6.0 and abs(mk - 6.5) < 1e-4 and at == 1440 and rel == 28800,
+check("Stock: -18 dB, 6:1, makeup +6.5 dB, attack 30 ms = 1440, release 600 ms = 28800 samples; engine passed on",
+      eng == engine and abs(th + 18) < 1e-4 and ra == 6.0 and abs(mk - 6.5) < 1e-4 and at == 1440 and rel == 28800,
       seen)
+put(0x19E, 300)
+fill([0.5] * N)
+e.call(SYM["master_comp"], comp, engine)
+l, r = planes()
+check("Mix 30 % (Stock): 0.7 dry + 0.3 wet (the stub's wet is silence) -> 0.35", abs(l[0] - 0.35) < 1e-5 and abs(r[5] - 0.35) < 1e-5,
+      (l[0], r[5]))
+put(0x19E, 1000)
+
+# --- SSL type: our DSP on bus 0, the stock DSP not called
+put(0x19D, 1)
+seen.clear()
+e.w32(0x2406D580, 0)                                       # SSL state: fresh
+def ssl_run(gen, blocks):
+    out = []
+    for b in range(blocks):
+        fill([gen(b * N + k) for k in range(N)])
+        e.call(SYM["master_comp"], comp, engine)
+        out += planes()[0]
+    return out
+
+def db(x):
+    return 20 * math.log10(max(x, 1e-9))
+
+sine = lambda a: (lambda k: a * math.sin(2 * math.pi * 1000 * k / 48000))
+def steady_reduction(ratio_idx, att=2, rel=0, thr=-20000, amp=0.5):
+    put(COMP["thresh"], thr)
+    put(COMP["gain"], 0)
+    put(0x19F, ratio_idx)
+    put(0x17D, att)
+    put(0x17F, rel)
+    e.w32(0x2406D580, 0)
+    out = ssl_run(sine(amp), 300)                          # 0.8 s
+    return db(max(abs(x) for x in out[-4800:])) - db(amp)
+red = [steady_reduction(i) for i in (0, 1, 2)]
+expect = [(1 / R - 1) * 14 for R in (2, 4, 10)]            # -6 dBFS sine, threshold -20 dB: 14 dB over
+print("     SSL steady reduction (2/4/10:1):", [round(x, 2) for x in red], "expected", [round(x, 2) for x in expect])
+check("SSL: stock DSP not called; steady reduction of a -6 dBFS sine at -20 dB threshold = (1/R - 1) x 14 dB (+-1.5 dB)",
+      not seen and all(abs(a - b) < 1.5 for a, b in zip(red, expect)), (red, expect))
+
+def env_after(att_idx, ms):                                # gain reduction (dB) ms after a step from silence
+    put(0x17D, att_idx)
+    put(0x17F, 0)
+    put(0x19F, 2)
+    e.w32(0x2406D580, 0)
+    out = ssl_run(sine(0.5), (ms * 48 + N - 1) // N)
+    seg = out[-480:]
+    return db(max(abs(x) for x in seg)) - db(0.5)
+fast, slow = env_after(0, 10), env_after(5, 10)
+check("SSL attack: 0.1 ms is fully down after 10 ms, 30 ms is still on the way", fast < slow - 3, (fast, slow))
+
+def recovery(burst_s, rel_idx):                            # reduction 150 ms after a burst of burst_s seconds
+    put(0x17D, 2)
+    put(0x17F, rel_idx)
+    put(0x19F, 2)
+    e.w32(0x2406D580, 0)
+    nb = int(burst_s * 48000 / N)
+    out = ssl_run(lambda k: 0.5 * math.sin(2 * math.pi * 1000 * k / 48000) if k < nb * N else
+                  0.01 * math.sin(2 * math.pi * 1000 * k / 48000), nb + 56)
+    return db(max(abs(x) for x in out[-480:])) - db(0.01)
+short_auto, long_auto = recovery(0.05, 4), recovery(1.5, 4)
+print(f"     SSL Auto release: 150 ms after a 50 ms burst {short_auto:.1f} dB, after 1.5 s {long_auto:.1f} dB")
+check("SSL Auto release: recovers fast after a short burst, holds after sustained compression", short_auto > long_auto + 3,
+      (short_auto, long_auto))
+
+child_calls = []
+child = e.new(16)
+vt = e.new(16)
+e.w32(child, vt)
+e.w32(vt + 0xC, 0x0807F001)
+e.stub(0x0807F000, lambda uc: child_calls.append((uc.reg_read(UC_ARM_REG_R0), uc.reg_read(UC_ARM_REG_R1))))
+e.w32(comp + 8, child)
+fill([0.1] * N)
+e.call(SYM["master_comp"], comp, engine)
+e.w32(comp + 8, 0)
+check("SSL: the next node (object +8, vtable +0xc) is called like the stock DSP does", child_calls == [(child, engine)],
+      child_calls)
+e.call(0x080A31D4, bus0)
+e.call(0x080A31C8, bus0, N)
+e.mu.mem_write(bus0 + 0x10, b"\1")
+e.call(SYM["master_comp"], comp, engine)
+check("SSL: silent bus stays silent (flag untouched)", e.mu.mem_read(bus0 + 0x10, 1)[0] == 1)
+put(0x19D, 0)
+put(COMP["thresh"], -4000)
+put(COMP["gain"], -4000)
 
 # --- distortion on bus 0
-N = 128
 bus = e.new(20)
 e.call(0x080A310C, bus, N)
 def run(block_fn, blocks, **params):

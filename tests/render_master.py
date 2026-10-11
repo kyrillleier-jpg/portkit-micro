@@ -4,8 +4,9 @@
 the block driver's order: distortion, then compressor.
 
   python3 -I tests/render_master.py <in.wav> <out.wav> [id=value ...]
-      ids: thresh ratio attack release gain (compressor), dtype drive tone mix level (distortion); values as stored
-      (milli-dB, ms, list index, 0..1000). Default: compressor neutral (0 dB, 1:1, 0 dB), distortion off.
+      ids: ctype (0 Stock, 1 SSL) thresh ratio attack release gain cmix (compressor; SSL switches: sratio 0-2 = 2/4/10,
+      sattack 0-5 = 0.1/0.3/1/3/10/30 ms, srelease 0-4 = 0.1/0.3/0.6/1.2 s/Auto), dtype drive tone mix level
+      (distortion); values as stored (milli-dB, ms, list index, 0..1000). Default: Stock neutral, distortion off.
   python3 -I tests/render_master.py --examples <dir>       renders the example set from sim/testsignals.py
 """
 import math
@@ -22,9 +23,9 @@ from unicorn.arm_const import UC_ARM_REG_R0  # noqa: E402
 
 APP = 0x24013CB0
 SET = APP + 0x7FD0
-IDS = {"thresh": 0x1A1, "ratio": 0x1A2, "attack": 0x1A3, "release": 0x1A5, "gain": 0x1A6,
+IDS = {"ctype": 0x19D, "cmix": 0x19E, "sratio": 0x19F, "sattack": 0x17D, "srelease": 0x17F, "thresh": 0x1A1, "ratio": 0x1A2, "attack": 0x1A3, "release": 0x1A5, "gain": 0x1A6,
        "dtype": 0x1A7, "drive": 0x1A8, "tone": 0x1A9, "mix": 0x1AB, "level": 0x1AC}
-NEUTRAL = {"thresh": 0, "ratio": 1, "attack": 10, "release": 250, "gain": 0, "dtype": 0}
+NEUTRAL = {"ctype": 0, "cmix": 1000, "thresh": 0, "ratio": 1, "attack": 10, "release": 250, "gain": 0, "dtype": 0}
 N = 128
 
 
@@ -41,6 +42,7 @@ class Master:
         self.comp = e.new(0x800)
         e.call(0x080B9D34, self.comp)                             # stock compressor object (as at engine init)
         e.w32(0x2406D410, 0)                                      # distortion state: fresh
+        e.w32(0x2406D580, 0)                                      # SSL state: fresh
 
     def set(self, **kw):
         for k, v in kw.items():
@@ -112,6 +114,11 @@ EXAMPLES = [
     ("chord.wav", "chord_4_fold.wav", dict(dtype=3, drive=18000, tone=1000, mix=1000, level=-6000)),
     ("chord.wav", "chord_5_tube.wav", dict(dtype=4, drive=18000, tone=1000, mix=1000, level=-8000)),
     ("chord.wav", "chord_6_soft_dark_mix50.wav", dict(dtype=1, drive=24000, tone=450, mix=500, level=-4000)),
+    ("drums.wav", "drums_6_ssl_glue.wav", dict(ctype=1, thresh=-16000, sratio=0, sattack=5, srelease=4, gain=0)),
+    ("drums.wav", "drums_7_ssl_punch.wav", dict(ctype=1, thresh=-20000, sratio=1, sattack=4, srelease=0, gain=1000)),
+    ("drums.wav", "drums_8_ssl_smash.wav", dict(ctype=1, thresh=-30000, sratio=2, sattack=0, srelease=4, gain=14500)),
+    ("drums.wav", "drums_9_ssl_newyork.wav", dict(ctype=1, thresh=-30000, sratio=2, sattack=0, srelease=4, gain=19000,
+                                                   cmix=400)),
     ("drums.wav", "drums_5_tube_plus_comp.wav", dict(dtype=4, drive=12000, tone=800, mix=1000, level=-6000,
                                                       thresh=-18000, ratio=4, attack=10, release=200, gain=4500)),
 ]
