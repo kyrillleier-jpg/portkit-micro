@@ -320,7 +320,8 @@ static void svf_coeffs(float knob, float res, float *g, float *r)
  * (init loop 0x08077f5e), read with the stock store lookup 0x080894d0.
  */
 typedef int (*setting_fn)(const void *store, unsigned param);
-#define fw_setting ((setting_fn)FN(0x080894d0))
+int fast_get(const void *store, unsigned param);       /* fastget.c: 0x080894d0 with a cache */
+#define fw_setting fast_get
 #define APP_PADS   (0x24013cb0u + 0x1840u)
 
 unsigned pad_setting(const uint8_t *pad, unsigned param)

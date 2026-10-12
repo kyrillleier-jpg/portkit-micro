@@ -24,7 +24,7 @@ bitbox micro, Firmware 2.3.4. Keine Firmware in diesem Repo: Der Patcher arbeite
 | Fidelity auch auf der Pad-Seite von Clip, Slicer, Granular (`patches/pages.py`) | durch Emulation bestaetigt, nicht am Geraet |
 | Pads 9-16 als zweite Seite des Pad-Rasters (`patches/padpages.py`), Umschalten nur per Button: Pads = Linkspfeil, Mixer = Feld oben links, Effects = erneuter Druck auf die gewaehlte Zelle DLY/RVB, Pad-Waehler = Linkspfeil (Pad-Namen 5 Zeichen, folgt der Seite des markierten Pads); Encoder waehlt innerhalb der Seite | pkB am Geraet: Seiten und Waehler gehen; pkE: Encoder auf Seite 2 (Encoder-Listen des Pads-Bildschirms), nicht am Geraet |
 
-Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkY`.
+Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkZ`.
 
 ## Bauen
 

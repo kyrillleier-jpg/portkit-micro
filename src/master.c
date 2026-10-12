@@ -10,7 +10,7 @@
  *   master_comp (hooked at 0x08097056) writes them from the settings store before every block.
  * - Distortion: on bus 0 (Out 1/2) after the FX returns and the master EQ, before the compressor (thunk at 0x08096d1c,
  *   the compressor flag's load, so it runs whether the compressor is on or not). 2x oversampled (31-tap half-band
- *   up / down), shapers Soft (tanh) / Hard (clip) / Fold (triangle) / Tube (asymmetric tanh, DC blocked), Tone (one-pole
+ *   up / down), shapers Soft (tanh) / Hard (clip) / Fold (triangle) / Tube (asymmetric tanh, DC blocked; state 0x2406f800), Tone (one-pole
  *   low-pass, the stock cutoff curve), Mix (dry delayed by the filters' 15 samples), Level.
  * - Comp Type (0x19d): Stock = the stock DSP above; SSL = an SSL-style bus compressor of ours (ssl_run, end of
  *   file) with the SSL's switch values (ratio 0x19f, attack 0x17d, release 0x17f incl. Auto); threshold and Gain
@@ -43,7 +43,8 @@ typedef int (*frames_fn)(void *buf);
 typedef float (*curve_fn)(float x);
 #define fw_register_list ((register_list_fn)FN(0x08069e7c))
 #define fw_register_knob ((register_knob_fn)FN(0x08069ed4))
-#define fw_store_get     ((store_get_fn)FN(0x080894d0))
+int fast_get(const void *store, unsigned param);       /* fastget.c: 0x080894d0 with a cache */
+#define fw_store_get fast_get
 #define fw_store_add     ((store_add_fn)FN(0x0808951e))
 #define fw_list_add      ((list_add_fn)FN(0x080836a4))     /* list: +0 count (u32, max 0x2f), entries of 12 bytes */
 #define fw_screen        ((screen_fn)FN(0x0808eedc))
@@ -326,10 +327,13 @@ static const float HB[8] = {0.314318663f, -0.094598776f, 0.046056884f, -0.023741
                             0.011624296f, -0.005037228f, 0.001760217f, -0.000394379f};
 #define HLEN 16
 
+/* delay lines as rings stored twice (newest first): a window of the last 16 (8) values is always contiguous, nothing
+   is shifted per sample */
 struct dch {
-    float x[HLEN];               /* input history, x[0] newest (x[15] = the dry signal, aligned with the output) */
-    float sb[HLEN];              /* shaped odd (in-between) samples, newest first */
-    float sa[8];                 /* shaped even samples, newest first */
+    float xr[2 * HLEN];          /* input; window x[0..15], x[15] = the dry signal, aligned with the output */
+    float sbr[2 * HLEN];         /* shaped odd (in-between) samples */
+    float sar[16];               /* shaped even samples (8) */
+    uint32_t xp, sbp, sap;
     float lp, dcx, dcy;          /* tone low-pass, DC blocker */
 };
 struct dist {
@@ -337,30 +341,28 @@ struct dist {
     float drive, mix, level;     /* smoothed: the last block's values */
     struct dch ch[2];
 };
-#define DS ((struct dist *)0x2406d410u)
-#define DMAGIC 0x44495354u       /* "DIST" */
+#define DS ((struct dist *)0x2406f800u)
+#define DMAGIC 0x44495355u       /* "DISU" (ring layout) */
 
 static float run1(struct dch *c, int type, float in, float drive, float tone_a, int tone_on)
 {
-    for (int i = HLEN - 1; i > 0; i--)
-        c->x[i] = c->x[i - 1];
-    c->x[0] = in;
+    unsigned p = c->xp = (c->xp - 1u) & (HLEN - 1);
+    c->xr[p] = c->xr[p + HLEN] = in;
+    const float *x = &c->xr[p];
     /* up: even = x[n-8], odd = interpolated at n-7.5 */
-    float b = 0.0f;
-    for (int m = 0; m < 8; m++)
-        b += HB[m] * (c->x[7 - m] + c->x[8 + m]);
-    float sa = shape(type, c->x[8] * drive);
+    float b = HB[0] * (x[7] + x[8]) + HB[1] * (x[6] + x[9]) + HB[2] * (x[5] + x[10]) + HB[3] * (x[4] + x[11])
+            + HB[4] * (x[3] + x[12]) + HB[5] * (x[2] + x[13]) + HB[6] * (x[1] + x[14]) + HB[7] * (x[0] + x[15]);
+    float sa = shape(type, x[8] * drive);
     float sbv = shape(type, 2.0f * b * drive);
-    for (int i = 7; i > 0; i--)
-        c->sa[i] = c->sa[i - 1];
-    c->sa[0] = sa;
-    for (int i = HLEN - 1; i > 0; i--)
-        c->sb[i] = c->sb[i - 1];
-    c->sb[0] = sbv;
+    unsigned q = c->sap = (c->sap - 1u) & 7u;
+    c->sar[q] = c->sar[q + 8] = sa;
+    unsigned r = c->sbp = (c->sbp - 1u) & (HLEN - 1);
+    c->sbr[r] = c->sbr[r + HLEN] = sbv;
+    const float *sb = &c->sbr[r];
     /* down: centre sa[7] (= x[n-15]) */
-    float y = 0.5f * c->sa[7];
-    for (int m = 0; m < 8; m++)
-        y += HB[m] * (c->sb[7 - m] + c->sb[8 + m]);
+    float y = 0.5f * c->sar[q + 7]
+            + HB[0] * (sb[7] + sb[8]) + HB[1] * (sb[6] + sb[9]) + HB[2] * (sb[5] + sb[10]) + HB[3] * (sb[4] + sb[11])
+            + HB[4] * (sb[3] + sb[12]) + HB[5] * (sb[2] + sb[13]) + HB[6] * (sb[1] + sb[14]) + HB[7] * (sb[0] + sb[15]);
     if (type == D_TUBE) {                                  /* DC blocker, ~8 Hz */
         float o = y - c->dcx + 0.999f * c->dcy;
         c->dcx = y;
@@ -425,11 +427,11 @@ void master_dist(void *bus0)
         mx += dm;
         lv += dl;
         float wl = run1(&d->ch[0], type, l[k], dr, tone_a, tone_on);
-        float dryl = d->ch[0].x[HLEN - 1];
+        float dryl = d->ch[0].xr[d->ch[0].xp + HLEN - 1];
         l[k] = (dryl + mx * (wl - dryl)) * lv;
         if (r && r != l) {
             float wr = run1(&d->ch[1], type, r[k], dr, tone_a, tone_on);
-            float dryr = d->ch[1].x[HLEN - 1];
+            float dryr = d->ch[1].xr[d->ch[1].xp + HLEN - 1];
             r[k] = (dryr + mx * (wr - dryr)) * lv;
         }
     }

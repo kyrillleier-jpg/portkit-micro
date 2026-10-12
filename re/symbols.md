@@ -760,3 +760,14 @@ Kompressor-Seite baut die Seite neu auf (Regler je Typ). Defaults SSL: 2:1 / 30 
 (Kennlinie 2/4/10:1 innerhalb 0,6 dB, Attack, Auto-Release, Mix, Seiten, Hook), Simulation: beide Seiten angezeigt.
 Gefunden beim Testen: exp2_fast ist nahe 1 nur auf ~2,5e-4 genau (Zeitkonstanten > 80 ms unmoeglich) -> Koeffizienten
 per Reihe; log2-Naeherung brauchte Exponent - 128.
+
+## CPU-Last (Build pkZ, 2026-10-12)
+
+Messung: `tests/perf.py` (Unicorn, Befehle pro 128-Frame-Block je DSP-Stufe) und Renode (`sim/prof.py`, ganze Engine
+pro Block). Budget 1,28 M Takte pro Block (480 MHz); Takte pro Befehl unbekannt (Annahme 1,0-1,5), daher Schaetzung.
+pkZ-Einsparungen: Parameter-Abfragen ueber einen Cache (src/fastget.c, 0x2406F000, 256 Eintraege, gegen den Store
+geprueft), Distortion mit Ringpuffern (Zustand jetzt 0x2406F800; -50 %), Reverb-LFOs pro Block interpoliert (Hall /
+Chamber -14 %, Room -8 %, FX3 -12 %). Engine (Renode, Befehle pro Block): Leerlauf ~67 000; 8 Granular-Pads (8 Grains,
+Density max) ~300 000-340 000; dazu alle pk-Features ~+240 000. Pad-Modus im Preset: Attribut `cellmode` (0 Sample,
+1 Clip, 2 Slicer, 3 Granular; Liste 0x6D). Granular-XML: graincount, graindensity, grainsizeperc, grainscat,
+grainpanrnd, grainreadspeed, gainssrcwin, grainsize. Status: durch Emulation bestaetigt, nicht am Geraet.

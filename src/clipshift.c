@@ -248,7 +248,8 @@ typedef int (*store_get_fn)(const void *store, unsigned param);
 #define fw_page        ((page_fn)FN(0x08076d8c))
 #define fw_record      ((record_fn)FN(0x08076d54))
 #define fw_list_remove ((list_remove_fn)FN(0x080836c8))
-#define fw_store_get   ((store_get_fn)FN(0x080894d0))
+int fast_get(const void *store, unsigned param);       /* fastget.c: 0x080894d0 with a cache */
+#define fw_store_get fast_get
 #define P_QUANT        0x2a
 #define P_SYNC         0x76
 #define QUANT_NONE     8

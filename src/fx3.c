@@ -49,7 +49,8 @@ typedef void (*store_init_fn)(void *store, const uint8_t *type);
 #define fw_heap_free  ((free_fn)FN(0x08042e44))
 #define fw_plate_init ((init_fn)FN(0x080a9c94))
 #define fw_send_curve ((curve_fn)FN(0x080a04c0))      /* send value / 1000 -> gain (the stock send setters) */
-#define fw_store_get  ((store_get_fn)FN(0x080894d0))
+int fast_get(const void *store, unsigned param);       /* fastget.c: 0x080894d0 with a cache */
+#define fw_store_get fast_get
 #define fw_store_init ((store_init_fn)FN(0x08089fc4))
 #define fw_screen     ((screen_fn)FN(0x0808eedc))     /* app: show screen (0x23 = FX cell page of app +0x28) */
 #define fw_set_cell   ((cell_fn)FN(0x0807b20c))       /* app command 0x111: app +0x28 = msg +4, notification 0x112 */

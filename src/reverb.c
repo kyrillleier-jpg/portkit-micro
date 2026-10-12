@@ -39,7 +39,8 @@ typedef int (*store_get_fn)(const void *store, unsigned param);
 #define fw_register_list ((register_list_fn)FN(0x08069e7c))
 #define fw_register_knob ((register_knob_fn)FN(0x08069ed4))
 #define fw_store_add     ((store_add_fn)FN(0x0808951e))
-#define fw_store_get     ((store_get_fn)FN(0x080894d0))
+int fast_get(const void *store, unsigned param);       /* fastget.c: 0x080894d0 with a cache */
+#define fw_store_get fast_get
 
 #define APP_FX     (0x24013cb0u + 0x2200u)     /* app: FX cell records, 0x18 each, by row (0x0807d854) */
 #define OBJ_ID     0x18                        /* engine object id: 3 << 16 | row << 8 (reverb 0x30100) */
@@ -306,6 +307,17 @@ static void tank_run(volatile struct rstate *RS, float *state, const struct tank
     float xa = RS->lp_a[0], ta = RS->lp_a[1], xb = RS->lp_b[0], tb = RS->lp_b[1];
     float fa = RS->fb_a, fb = RS->fb_b, hcs = RS->hc, lcs = RS->lc;
     uint32_t lfo = RS->lfo, wan = RS->wander;
+    /* the LFO (<= 5 Hz) moves ~1 % of a cycle per block: its values at the block's ends, linear in between (no sines
+       per sample); the phases advance exactly as per sample */
+    uint32_t wan_inc = lfo_inc / 7u + 1u;
+    uint32_t lfo_e = lfo + (uint32_t)n * lfo_inc, wan_e = wan + (uint32_t)n * wan_inc;
+    float m1 = 0.75f * sin32(lfo) + 0.25f * sin32(wan);
+    float m2 = 0.75f * sin32(lfo + 0x40000000u) + 0.25f * sin32(wan + 0x9e3779b9u);
+    float inv_n = n > 0 ? 1.0f / (float)n : 0.0f;
+    float dm1 = (0.75f * sin32(lfo_e) + 0.25f * sin32(wan_e) - m1) * inv_n;
+    float dm2 = (0.75f * sin32(lfo_e + 0x40000000u) + 0.25f * sin32(wan_e + 0x9e3779b9u) - m2) * inv_n;
+    lfo = lfo_e;
+    wan = wan_e;
 
     for (int i = 0; i < n; i++) {
         /* input: band limits */
@@ -330,11 +342,9 @@ static void tank_run(volatile struct rstate *RS, float *state, const struct tank
             b[w5 & 511] = v;
             d = y + g * v;
         }
-        /* modulation: two quadrature sines + a slow wander */
-        lfo += lfo_inc;
-        wan += lfo_inc / 7u + 1u;
-        float m1 = 0.75f * sin32(lfo) + 0.25f * sin32(wan);
-        float m2 = 0.75f * sin32(lfo + 0x40000000u) + 0.25f * sin32(wan + 0x9e3779b9u);
+        /* modulation: two quadrature sines + a slow wander, linear across the block (set up before the loop) */
+        m1 += dm1;
+        m2 += dm2;
 
         /* branch A */
         float a = d + fb;
@@ -477,6 +487,17 @@ static void room(volatile struct rstate *RS, float *state, const struct settings
     unsigned ep = RS->er_pos, ip[4], lpos[8], apos[8];
     float lp[8], xl[8];
     uint32_t lfo0 = RS->rlfo[0];
+    /* modulation offsets at the block's ends, linear in between (see tank_run) */
+    float moff[4], dmoff[4];
+    {
+        uint32_t lfo_e = lfo0 + (uint32_t)n * inc;
+        float inv_n = n > 0 ? 1.0f / (float)n : 0.0f;
+        for (int m = 0; m < 4; m++) {
+            moff[m] = depth * (1.0f + sin32(lfo0 + inc + spread[m]));
+            dmoff[m] = (depth * (1.0f + sin32(lfo_e + inc + spread[m])) - moff[m]) * inv_n;
+        }
+        lfo0 = lfo_e;
+    }
     float hcs = RS->hc, lcs = RS->lc;
     for (int k = 0; k < 4; k++)
         ip[k] = RS->in_ap_pos[k];
@@ -507,10 +528,10 @@ static void room(volatile struct rstate *RS, float *state, const struct settings
         float o[8], rd[8];
         for (int k = 0; k < 8; k++)
             rd[k] = line[k][lpos[k]];
-        lfo0 += inc;
         for (int m = 0; m < 4; m++) {
             int k = mod_line[m];
-            float off = depth * (1.0f + sin32(lfo0 + spread[m]));
+            float off = moff[m];
+            moff[m] += dmoff[m];
             int io = (int)off;
             float fr = off - (float)io;
             unsigned a = lpos[k] + (unsigned)io, ln = len[k];
