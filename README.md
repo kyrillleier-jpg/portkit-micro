@@ -19,12 +19,13 @@ bitbox micro, Firmware 2.3.4. Keine Firmware in diesem Repo: Der Patcher arbeite
 | FX3: dritter Send (Bus 0xC) mit zweitem Reverb; Effects: Linkspfeil = Seiten, zweites Tippen auf RVB = RVB/FX3; Rechtspfeil = FX3-Regler, nochmal = Master-EQ (`patches/fx3.py`) | pkU am Geraet: laeuft (Hall leise → pkV); pkW: FX3 auf Zeile 3 statt EQ, nicht am Geraet |
 | Master-Sektion: Tools-Seite Linkspfeil = Kompressor (Threshold, Ratio, Attack, Release, Gain; stock Kompressor), Rechtspfeil = Master-Distortion (Soft / Hard / Fold / Tube, Drive, Tone, Mix, Level; 2x Oversampling) (`patches/master.py`) | pkX: durch Emulation bestaetigt, nicht am Geraet |
 | Kompressor-Typ SSL (Schalter Ratio 2/4/10, Attack 0,1-30 ms, Release 0,1-1,2 s/Auto) und Mix fuer beide Typen (`patches/master.py`) | pkY: durch Emulation bestaetigt, nicht am Geraet |
+| Aufnahme: FX1/FX2/FX3 Sends bleiben beim Neuanlegen des Pads erhalten; Monitor geht durch die Sends des gewaehlten Pads (`src/recmon.c`) | pkZA: durch Emulation bestaetigt (Record, Mischung), nicht am Geraet |
 | Sync-Raster 1/32 (Clips); Play Len / Stretch ausgeblendet, wenn Quant Size / Sync sie unwirksam machen | pkK: durch Emulation bestaetigt, nicht am Geraet |
 | Machine-Drive (Saturation als Wandler-Eingang) | nicht portiert (Micro hat keinen Saturation-Parameter) |
 | Fidelity auch auf der Pad-Seite von Clip, Slicer, Granular (`patches/pages.py`) | durch Emulation bestaetigt, nicht am Geraet |
 | Pads 9-16 als zweite Seite des Pad-Rasters (`patches/padpages.py`), Umschalten nur per Button: Pads = Linkspfeil, Mixer = Feld oben links, Effects = erneuter Druck auf die gewaehlte Zelle DLY/RVB, Pad-Waehler = Linkspfeil (Pad-Namen 5 Zeichen, folgt der Seite des markierten Pads); Encoder waehlt innerhalb der Seite | pkB am Geraet: Seiten und Waehler gehen; pkE: Encoder auf Seite 2 (Encoder-Listen des Pads-Bildschirms), nicht am Geraet |
 
-Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkZ`.
+Splash: Zeile 2 `portkit mod`, Version `2.3.4-pkZA`.
 
 ## Bauen
 

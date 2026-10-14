@@ -155,5 +155,66 @@ calls.clear()
 e.call(SYM["fx3_right"], APP, 0x14, 0, 0)
 check("right arrow on the EQ's / RVB's page: stock (screen 0x14)", calls == [("screen", APP, 0x14, 0, 0)], calls)
 
+# --- recording: sends survive the pad record's rebuild (rec_reinit at 0x0807b59e)
+REC_PAD = APP + 0x1840 + 3 * 0xF0 + 3 * 0x30
+t45 = e.new(4)
+e.mu.mem_write(t45, b"\x45")
+e.call(0x08089FC4, REC_PAD, t45)
+for pid, v in ((0xBB, 300), (0xBC, 700), (0x1C8, 500), (0x1C2, 400)):
+    e.call(0x080894FA, REC_PAD, pid, v)
+t3 = e.new(4)
+e.mu.mem_write(t3, b"\x03")
+e.call(SYM["rec_reinit"], REC_PAD, t3)
+get = lambda pid: e.call(0x080894D0, REC_PAD, pid)
+check("rec_reinit: full pad record (66 entries), FX1 / FX2 / FX3 sends kept (300 / 700 / 500), Drive reset (0)",
+      e.r16(REC_PAD + 0xA) == 66 and (get(0xBB), get(0xBC), get(0x1C8), get(0x1C2)) == (300, 700, 500, 0),
+      (e.r16(REC_PAD + 0xA), get(0xBB), get(0xBC), get(0x1C8), get(0x1C2)))
+check("patch: 0x0807b59e calls rec_reinit; the input node's vtable entry 0x080ddfb4 -> mon_node",
+      struct.unpack_from("<I", IMG, 0x080DDFB4 - 0x08040000)[0] == SYM["mon_node"] | 1)
+
+# --- the monitor through the selected pad's sends (mon_node around the input node 0x080a4d1c)
+mon_obj = e.new(0x100)
+e.w32(mon_obj + 0x68, 0)                                    # Mon Output: bus 0
+MON_SIG = 0.25
+def _input_node(uc):                                        # stand-in node: adds MON_SIG to bus 0 (memory only:
+    b = bus(0)                                              #  no nested e.call inside a hook)
+    l, r = struct.unpack("<II", uc.mem_read(b + 8, 8))
+    if uc.mem_read(b + 0x10, 1)[0]:
+        uc.mem_write(l, b"\0" * 4 * N)
+        uc.mem_write(r, b"\0" * 4 * N)
+        uc.mem_write(b + 4, struct.pack("<I", N))
+        uc.mem_write(b + 0x10, bytes([0, 1]))
+    for pl in (l, r):
+        v = struct.unpack(f"<{N}f", uc.mem_read(pl, 4 * N))
+        uc.mem_write(pl, struct.pack(f"<{N}f", *(x + MON_SIG for x in v)))
+    uc.reg_write(UC_ARM_REG_R0, 1)
+e.stub(0x080A4D1C, _input_node)
+def mon_block(fx1, fx2, fx3, pre=0.1):
+    e.call(0x080894FA, APP + 0x1840, 0xBB, fx1)            # selected pad: row 0, col 0 (app +0x14 = 0)
+    e.call(0x080894FA, APP + 0x1840, 0xBC, fx2)
+    e.call(0x080894FA, APP + 0x1840, 0x1C8, fx3)
+    e.mu.mem_write(APP + 0x14, struct.pack("<H", 0))
+    clear_buses()
+    il, ir = e.new(4), e.new(4)
+    e.call(0x080A32D4, bus(0), il, ir)                      # something already on bus 0 (a pad)
+    e.wf(e.r32(il), [pre] * N)
+    e.wf(e.r32(ir), [pre] * N)
+    r = e.call(SYM["mon_node"], mon_obj, engine)
+    out = {}
+    for i in (0, 0xC, 0xD, 0xE):
+        if e.mu.mem_read(bus(i) + 0x10, 1)[0]:
+            out[i] = 0.0
+        else:
+            pl, pr = planes(bus(i))
+            out[i] = e.rf(pl, 1)[0]
+    return r, out
+r, o = mon_block(0, 0, 0)
+check("mon_node, sends 0: the node only (bus 0 = pad + monitor), FX buses untouched",
+      r == 1 and abs(o[0] - 0.35) < 1e-6 and o[0xC] == o[0xD] == o[0xE] == 0.0, o)
+r, o = mon_block(1000, 500, 250)
+print(f"     monitor sends: FX1 {o[0xD]:.4f}, FX2 {o[0xE]:.4f}, FX3 {o[0xC]:.4f} (monitor {MON_SIG})")
+check("mon_node, sends 1000 / 500 / 250: only the monitor (not the pad on bus 0) to FX1 / FX2 / FX3, falling with the send",
+      abs(o[0] - 0.35) < 1e-6 and 0 < o[0xC] < o[0xE] < o[0xD] <= MON_SIG + 1e-6, o)
+
 print(f"\n{'FAILED: ' + str(failures) if failures else 'all passed'}")
 sys.exit(1 if failures else 0)

@@ -2,6 +2,7 @@
 (src/padpages.c: second touch on RVB switches the right cell RVB <-> FX3; pages by the left arrow). Needs `fidelity`
 (registers FX3 Send), `sound` (pad record entry), `padpages`, `reverb` and the cave. Addresses: re/symbols.md "FX3"."""
 import os
+import struct
 
 from thumb import ROOT, bl, symbols
 
@@ -12,7 +13,11 @@ HOOKS = [
     (0x080B8046, 0x080A3328, "fx3_mix_b"),      # clip pads
     (0x08096D04, 0x080A3328, "fx3_master"),     # block driver: bus 0 += bus 0xe, then += FX3(bus 0xc)
     (0x08083964, 0x0808EEDC, "fx3_right"),      # right arrow on the FX cell page (0x23 -> 0x14); from FX3: master EQ
+    (0x0807B59E, 0x08089FC4, "rec_reinit"),     # recording: pad record rebuilt as a clip pad; the sends kept (recmon.c)
 ]
+
+# the input node's process (vtable entry): the monitor through the selected pad's sends (src/recmon.c)
+DATA = [(0x080DDFB4, 0x080A4D1D, "mon_node")]
 
 # FX cell record row 3 (app +0x2248, cell 0x330): the eight stock inits (boot, new / loaded preset) make it an empty
 # type-0 record; `movs r3, #0` before each (type byte for 0x08089fc4) -> `movs r3, #0x44` (reverb) for FX3
@@ -32,4 +37,5 @@ PATCHES = (
     [(at, bl(at, stock), bl(at, sym[name])) for at, stock, name in HOOKS]
     + [(at, bytes.fromhex(old), bl(at, sym[name])) for at, old, name in THUNKS]
     + [(at, bytes.fromhex("0023"), bytes.fromhex("4423")) for at in ROW3_TYPE]
+    + [(at, struct.pack("<I", old), struct.pack("<I", sym[name] | 1)) for at, old, name in DATA]
 )

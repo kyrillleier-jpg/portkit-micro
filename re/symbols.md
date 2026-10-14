@@ -771,3 +771,25 @@ Chamber -14 %, Room -8 %, FX3 -12 %). Engine (Renode, Befehle pro Block): Leerla
 Density max) ~300 000-340 000; dazu alle pk-Features ~+240 000. Pad-Modus im Preset: Attribut `cellmode` (0 Sample,
 1 Clip, 2 Slicer, 3 Granular; Liste 0x6D). Granular-XML: graincount, graindensity, grainsizeperc, grainscat,
 grainpanrnd, grainreadspeed, gainssrcwin, grainsize. Status: durch Emulation bestaetigt, nicht am Geraet.
+
+## Aufnahme und Monitor (Renode, 2026-10-12, Stand der Untersuchung)
+
+| Adresse | Was | Beleg | Status |
+|---|---|---|---|
+| app+0x7CB8 + n x 0x10 | 8 Eingangszellen (Tools-Bildschirm 0x33), Parameter 0xD9 "Input:" GATE/CV/CLK/AUDIO; In 1/2 muessen AUDIO sein, sonst verweigert die Aufnahmeseite | find_stores, Simulation | durch Emulation bestaetigt |
+| 0x080950D4 | kopiert In 1/2, In 3/4 jeden Block in Eingangs-Busse (0x080A82CC(engine-Bereich, idx)); Aufruf aus der Engine 0x08093E44 | Watchpoint | durch Emulation bestaetigt |
+| 0x080A4D1C | globaler Eingangsknoten (id 0x400, kein Pad): Aufnahme + Monitor; Monitor-Ausgangsbus obj+0x68 = 0 (Out 1/2), Rec Mon obj+0x58, Gain obj+0x64 | Hook | durch Emulation bestaetigt |
+| 0x0807B400 (Aufruf 0x0807B59E) | 1-2 s nach Aufnahmestart: Pad-Record neu als Typ 3 (0x08089FC4 -> 0x08089548), alle Werte Standard inkl. FX1/FX2/FX3 Send; danach Pad Mode 0x6D und Output 0x77 gesetzt; Aufrufer 0x0807F6FA | Watchpoint / Hook | durch Emulation bestaetigt |
+
+Folgerungen: Der Monitor laeuft ueber Bus 0, Master-Distortion und Kompressor wirken also schon. Fuer "Sends bleiben":
+Sends vor dem Aufruf bei 0x0807B59E sichern, danach wieder setzen (auch an die Engine). Fuer "Monitor durch die Sends":
+0x080A4D1C umhuellen (Bus 0 vorher sichern, Differenz = Monitorsignal) und mit den Sends des gewaehlten, leeren
+bzw. aufnehmenden Pads auf FX1 (0xD) / FX2 (0xE) / FX3 (0xC) mischen.
+
+Umgesetzt (pkZA, `src/recmon.c`): rec_reinit (Hook 0x0807B59E) haelt FX1/FX2/FX3 Send ueber das Neuanlegen;
+mon_node (vtable 0x080DDFB4 statt 0x080A4D1D) mischt die Differenz am Monitor-Bus mit den Sends des gewaehlten Pads
+(app+0x14) auf die FX-Busse (0x080A33EC, Stock-Send-Kurve), Puffer 0x2406E000 / Struktur 0x2406FB00.
+Simulation: Rec Mon steht im Settings-Store (0x7B, Standard 1 = Auto: Monitor nur waehrend der Aufnahme); der
+Eingangsknoten liefert ab ~0,2 s nach Start; ab dem Neuanlegen (~1,5 s) spielt zusaetzlich die Pad-Stimme (eigene
+Sends). Nicht verifiziert: Rec Mon "On" vor der Aufnahme (Store-Schreiben erreicht die Engine nicht), ob die Engine
+die geretteten FX1/FX2-Sends nach dem Neuanlegen uebernimmt (FX3 liest den Record direkt).
