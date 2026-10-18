@@ -34,6 +34,7 @@ struct load {
 };
 #define LMAGIC 0x4c4f4144u      /* "LOAD" */
 #define LOAD ((volatile struct load *)0x2406c1c0u)        /* patch RAM, device memory, aligned */
+_Static_assert(sizeof(struct load) <= 0x40, "load meter state: 0x40 bytes");
 
 void load_in(void *engine, void *buf, int frames)
 {

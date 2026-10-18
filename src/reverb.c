@@ -193,6 +193,7 @@ struct rstate {
 };
 #define RS1 ((volatile struct rstate *)0x2406d000u)    /* reverb cell; after the WSOLA grain states (..0x2406cdff) */
 #define RS2 ((volatile struct rstate *)0x2406d100u)    /* FX3 (src/fx3.c) */
+_Static_assert(sizeof(struct rstate) <= 0x100, "reverb state must fit its 0x100 slot (tests/test_ram.py)");
 #define RMAGIC 0x52564231u             /* "RVB1" */
 _Static_assert(sizeof(struct rstate) <= 0x100, "reverb state fits its patch RAM slot");
 

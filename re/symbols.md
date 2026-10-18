@@ -793,3 +793,42 @@ Simulation: Rec Mon steht im Settings-Store (0x7B, Standard 1 = Auto: Monitor nu
 Eingangsknoten liefert ab ~0,2 s nach Start; ab dem Neuanlegen (~1,5 s) spielt zusaetzlich die Pad-Stimme (eigene
 Sends). Nicht verifiziert: Rec Mon "On" vor der Aufnahme (Store-Schreiben erreicht die Engine nicht), ob die Engine
 die geretteten FX1/FX2-Sends nach dem Neuanlegen uebernimmt (FX3 liest den Record direkt).
+
+## Patch-RAM-Kollision (pkZ/pkZA) und Korrektur (pkZB, 2026-10-14)
+
+Am Geraet (pkZA): Knacken beim Drehen an Master-Distortion- und Aufnahme-Gain-Reglern, Aufnahmen teils nur
+Knacken, Monitor-Sends ohne Wirkung. Ursache: die Annahme "oberhalb des initialen SP (0x240692A8) ist alles frei"
+(bitbox-micro-fw-patch) stimmt nicht. Renode-Kanarientest (Stock, 0x240692A8..0x2407FFFF vor dem Start mit 0xA5
+gefuellt; Booten, Preset, Aufnahme, Abspielen) - Firmware belegt: 0x2406F4E0-0x2406F537, 0x2406F660-0x2407B8BF
+(SD-/Aufnahme-Transferpuffer, 512-Byte-Ring; Puffer-Adressen auch an SD_read/SD_write gesehen), 0x2407BDC0-0x2407FFFF
+(Audio-/ADC-DMA). pkZ/pkZA hatten Parameter-Cache (0x2406F000), Distortion-Zustand (0x2406F800) und Monitor-Puffer-
+Struktur (0x2406FB00) mitten in den SD-Puffern: jede settings.tml-Speicherung (bei jedem Rasterschritt eines
+Settings-Reglers, 0x0807D3E8) und jede Aufnahme ueberschrieb sie, und der Cache schrieb in SD-Puffer.
+pkZB: Cache 0x2406A000, Distortion 0x2406A800, Monitor-Struktur 0x2406AB00; freier Bereich 0x240692A8-0x2406F4DF;
+tests/test_ram.py (Bereichstabelle, Ueberlappung, jede Adresskonstante in src/), _Static_assert auf die Zustands-
+groessen. Gegenprobe mit pkZB im Kanarientest: Firmware-Bereiche unveraendert, unsere nur in den eingetragenen.
+Status: durch Emulation bestaetigt, nicht am Geraet.
+
+## Stretch: Knacken beim Drehen (pkZC, 2026-10-16)
+
+Am Geraet (pkZB): beim Drehen am Stretch-Regler Knacken/Artefakte. Ursache (src/stretch.c): die Firmware setzt an jeder
+Sync-Segmentgrenze die Leseposition (Segment x Laenge x Stretch-Speed, clip_pos_thunk); nach einer Stretch-Aenderung
+springt sie dort. clip_render behandelte jeden Sprung (|dp| > 1) als Neustart: Grains verworfen, ein neuer mit voller
+Gewichtung - hoerbarer Schnitt (Test mit altem Code: groesster Sample-Schritt 0,486 gegen 0,104 des Sinus). Dazu
+schaltete Auto beim Durchgang durch 0 % hart zwischen Stock-Lesen und WSOLA. pkZC: Sprung waehrend des Spiels ->
+laufende Grains spielen weiter, der naechste Grain (<= 512 Frames) wird an der neuen Position gesucht (WSOLA-Splice);
+harter Neustart nur, wenn der Slot pausiert war (> ~14 ms, DWT-Zykluszaehler / 65536, Zeitstempel in den oberen
+16 Bit von has_old) oder beim Sprung an den Clipanfang (Retrigger, Loop-Ende); Auto bleibt WSOLA, solange der Slot
+laeuft. Tests (test_fidelity.py): Sprung ohne Knack (0,104), Sprung an den Anfang sofort, Auto ohne Umschalten.
+
+## Loop Fade fuer Clips (pkZD, 2026-10-16)
+
+Wunsch: Loop-Punkt-Knacken bei aufgenommenen Loops; Nullstelle oder kleiner Fade. Umgesetzt als Pegelsenke (echte
+Ueberblendung braucht Material ausserhalb des Loops, das eine Aufnahme nicht hat): Pad-Parameter 0x183 "Loop Fade:"
+(Typ 1, 0-50 ms, xml `pkloopfade`, Standard 0 = aus), neunter Eintrag der Clip-Loop-Seite (0x080C6A1C / 0x080C6C38
++ 2 x 0x5A; Seiten fassen bis 45 IDs), voller Pad-Record jetzt 67 von 72. In clip_read1/clip_read2 (alle Clip-Reads,
+auch WSOLA): Viertelsinus-Ausblendung der letzten F Frames vor und Einblendung der ersten F nach einer Naht
+(F = ms x 48, hoechstens Loop/4): logisch 0, Loop-Ende (synchron: clip_segments x Pad+0x1FC x Stretch-Speed, hoechstens
+Dateiende; sonst Dateiende) und bei Shift die Dateinaht bei logisch total - Shift. Test: test_fidelity.py (Hüllkurve
+an Anfang/Ende, Mitte unveraendert, Shift-Naht, aus bei 0). Offen: laeuft ein synchroner Clip bei abweichendem Tempo
+ohne Smooth-Stretch vor dem Loop-Ende in den Sprung, greift die Ausblendung am Ende nicht (Sprung vor der Zone).

@@ -287,19 +287,19 @@ src = sine(1000, 0.5)
 L0, _ = run(src, 8, type=0, drive=12000, tone=1000, mix=1000, level=0)
 check("Off: bus 0 unchanged", all(abs(a - b) < 1e-6 for a, b in zip(L0, sum((src(b)[0] for b in range(8)), []))))
 
-e.w32(0x2406F800, 0)                                       # fresh state
+e.w32(0x2406A800, 0)                                       # fresh state
 L, R = run(src, 12, type=1, drive=0, tone=1000, mix=0, level=0)
 ref = sum((src(b)[0] for b in range(12)), [])
 check("Mix 0: the dry signal, delayed by the filters' 15 samples (aligned with the wet path)",
       all(abs(L[k] - ref[k - 15]) < 1e-5 for k in range(15, len(L))), max(abs(L[k] - ref[k - 15]) for k in range(15, len(L))))
 
 for name, t in (("Soft", 1), ("Hard", 2), ("Fold", 3), ("Tube", 4)):
-    e.w32(0x2406F800, 0)
+    e.w32(0x2406A800, 0)
     L, R = run(sine(1000, 0.25), 20, type=t, drive=0, tone=1000, mix=1000, level=0)
     s = L[N * 4:]
     h1 = harm(s, 1000, 1)
     lin = abs(h1 - 0.25) < 0.02 if t != 4 else 0.15 < h1 < 0.3
-    e.w32(0x2406F800, 0)
+    e.w32(0x2406A800, 0)
     L, R = run(sine(1000, 0.5), 40, type=t, drive=18000, tone=1000, mix=1000, level=0)
     s = L[N * 24:]                                          # after the DC blocker (Tube) has settled
     h1, h2, h3 = harm(s, 1000, 1), harm(s, 1000, 2), harm(s, 1000, 3)
@@ -311,7 +311,7 @@ for name, t in (("Soft", 1), ("Hard", 2), ("Fold", 3), ("Tube", 4)):
     check(f"{name}: 0 dB drive, -12 dB sine passes ~linearly; 18 dB drive: bounded, odd harmonics, no DC", lin and ok)
 
 # aliasing: 7 kHz at 24 dB drive (hard clip); harmonics above 24 kHz fold back, 2x oversampling must keep them down
-e.w32(0x2406F800, 0)
+e.w32(0x2406A800, 0)
 L, _ = run(sine(7000, 0.5), 30, type=2, drive=24000, tone=1000, mix=1000, level=0)
 s = L[N * 6:]
 f_alias = [abs(48000 - 7000 * 5)]                          # 5th harmonic 35 kHz -> 13 kHz
@@ -322,11 +322,11 @@ check("2x oversampling: the 5th harmonic's alias (13 kHz) at least 20 dB below t
       a_alias < a_fund * 0.1)
 
 # Tone and Level
-e.w32(0x2406F800, 0)
+e.w32(0x2406A800, 0)
 Lo, _ = run(sine(8000, 0.1), 16, type=1, drive=0, tone=1000, mix=1000, level=0)
-e.w32(0x2406F800, 0)
+e.w32(0x2406A800, 0)
 Lt, _ = run(sine(8000, 0.1), 16, type=1, drive=0, tone=300, mix=1000, level=0)
-e.w32(0x2406F800, 0)
+e.w32(0x2406A800, 0)
 Ll, _ = run(sine(1000, 0.1), 16, type=1, drive=0, tone=1000, mix=1000, level=-6000)
 a_o, a_t = harm(Lo[N * 4:], 8000, 1), harm(Lt[N * 4:], 8000, 1)
 a_l = harm(Ll[N * 4:], 1000, 1)

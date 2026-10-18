@@ -123,6 +123,7 @@ struct pstate {
     uint16_t psel[MAX_PICKERS];  /* the pad each picker's owner last asked to mark (0xffff: none) */
 };
 #define ST     ((volatile struct pstate *)0x2406c110u)
+_Static_assert(sizeof(struct pstate) <= 0xb0, "pad pages state must end before the load meter at 0x2406c1c0");
 #define PMAGIC 0x50414745u       /* "PAGE" */
 enum { SCR_A, SCR_B, SCR_D };
 

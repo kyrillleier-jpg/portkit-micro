@@ -69,7 +69,7 @@ void rec_reinit(void *store, const uint8_t *type)
 #define MON_L  ((float *)0x2406e000u)
 #define MON_R  ((float *)0x2406e800u)
 struct buf { uint32_t cap, frames; float *l, *r; uint8_t silent, stereo, pad[2]; };
-#define MONBUF ((volatile struct buf *)0x2406fb00u)
+#define MONBUF ((volatile struct buf *)0x2406ab00u)
 
 static float send_gain(int v)
 {

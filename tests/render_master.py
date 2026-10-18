@@ -41,7 +41,7 @@ class Master:
         self.bus0 = self.engine + 0x150E4
         self.comp = e.new(0x800)
         e.call(0x080B9D34, self.comp)                             # stock compressor object (as at engine init)
-        e.w32(0x2406F800, 0)                                      # distortion state: fresh
+        e.w32(0x2406A800, 0)                                      # distortion state: fresh
         e.w32(0x2406D580, 0)                                      # SSL state: fresh
 
     def set(self, **kw):

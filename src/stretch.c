@@ -135,12 +135,20 @@ struct grains {
     int32_t age;                /* age of the new grain, 0..HOP */
     double s_old, s_new;        /* file position of each grain's first frame */
     double expect;              /* analysis position the next call should start at */
-    uint32_t has_old;
+    uint32_t has_old;           /* bit 0: the old grain is running; bits 16-31: when the slot last ran (now16) */
 };
 #define GMAGIC 0x57534f4cu      /* "WSOL" */
 #define SLOTS  64               /* 16 pads x 4 slots */
 #define GRAINS ((volatile struct grains *)0x2406c400u)   /* patch RAM, 64 x 40 bytes; device memory, aligned */
+_Static_assert(64 * sizeof(struct grains) <= 0xa00, "grain states must end before 0x2406ce00");
 _Static_assert(sizeof(struct grains) == 40, "grain state size");
+
+/* coarse time for "is this slot still playing": DWT cycle counter / 65536 (136 us at 480 MHz; enabled by load.c) */
+static inline __attribute__((always_inline)) uint32_t now16(void)
+{
+    return (*(volatile const uint32_t *)0xe0001004u >> 16) & 0xffffu;
+}
+#define GAP16 100               /* ~14 ms without a call: the slot had stopped (blocks come every 2.7 ms) */
 
 static int floor_i(double x)
 {
@@ -291,11 +299,32 @@ static int smooth(const uint8_t *pad)
 }
 
 /* replaces the call of 0x080b55ac at 0x080b58fc (same arguments) */
+/* the slot's grain state; 0 if the slot is not one of the 16 grid pads' 4 */
+static volatile struct grains *slot_grains(const uint8_t *pad, const float *frac)
+{
+    const uint8_t *slot = (const uint8_t *)frac - SLOT_FRAC;
+    int si = (int)(slot - pad - SLOT0) / SLOT_SIZE;
+    uint32_t id = *(const uint32_t *)(pad + PAD_ID);
+    unsigned row = (id >> 8) & 0xff, col = id & 0xff;
+    if (si < 0 || si > 3 || row > 3 || col > 3)
+        return 0;
+    return &GRAINS[(row * 4 + col) * 4 + si];
+}
+
+static int running(volatile const struct grains *g, uint32_t now)
+{
+    return g->magic == GMAGIC && ((now - (g->has_old >> 16)) & 0xffffu) < GAP16;
+}
+
 int clip_render(void *pad_, int unused, int64_t pos64, float rate, int n, int *consumed, float *frac, void *srcbuf,
                 void *outbuf, void **result)
 {
     const uint8_t *pad = pad_;
-    if (!smooth(pad))
+    volatile struct grains *g = pad ? slot_grains(pad, frac) : 0;
+    uint32_t now = now16();
+    /* Auto stays smooth while the slot keeps playing smoothly (no switch to the stock read when Stretch crosses 0) */
+    int latched = g && running(g, now) && pad[PAD_SYNCED] && !pad[PAD_SLICED] && pad_setting(pad, P_SMODE) == 0;
+    if (!smooth(pad) && !latched)
         return fw_slot_read(pad_, unused, pos64, rate, n, consumed, frac, srcbuf, outbuf, result);
     void *stream = *(void *const *)(pad + PAD_STREAM);
     int total = fw_frames(stream);
@@ -307,14 +336,8 @@ int clip_render(void *pad_, int unused, int64_t pos64, float rate, int n, int *c
         return fw_slot_read(pad_, unused, pos64, rate, n, consumed, frac, srcbuf, outbuf, result);
     double c = (double)seglen * clip_stretch_speed(pad) / unit;     /* file frames per output frame */
 
-    /* slot index: frac sits at slot +0x1c; pad id row << 8 | col */
-    uint8_t *slot = (uint8_t *)frac - SLOT_FRAC;
-    int si = (int)(slot - (uint8_t *)pad - SLOT0) / SLOT_SIZE;
-    uint32_t id = *(const uint32_t *)(pad + PAD_ID);
-    unsigned row = (id >> 8) & 0xff, col = id & 0xff;
-    if (si < 0 || si > 3 || row > 3 || col > 3)
+    if (!g)
         return fw_slot_read(pad_, unused, pos64, rate, n, consumed, frac, srcbuf, outbuf, result);
-    volatile struct grains *g = &GRAINS[(row * 4 + col) * 4 + si];
 
     struct src s;
     s.stream = stream;
@@ -343,7 +366,12 @@ int clip_render(void *pad_, int unused, int64_t pos64, float rate, int n, int *c
 
     double p = (double)pos + *frac;                     /* analysis position */
     double ex = g->expect, dp = p - ex;
-    if (g->magic != GMAGIC || dp > 1.0 || dp < -1.0) {  /* new segment / start: one grain, at full weight */
+    /* A fresh start (the slot had stopped) or a jump to the clip's start (retrigger, loop end): one grain at full
+       weight, so attacks stay sharp. Any other jump while playing (the next Sync segment's position after Stretch was
+       turned, Shift, ...): the running grains play on and the next grain (<= HOP frames later) is searched near the new
+       position - an ordinary WSOLA splice instead of a hard cut. */
+    int jump = dp > 1.0 || dp < -1.0;
+    if (!running(g, now) || (jump && p < (double)HOP * rate)) {
         g->magic = GMAGIC;
         g->age = HOP;
         g->s_new = p - (double)HOP * rate;              /* centred: its frame for "now" is p */
@@ -357,14 +385,14 @@ int clip_render(void *pad_, int unused, int64_t pos64, float rate, int n, int *c
             double cont = s_cur + (double)age * rate;   /* the current grain's next frame */
             double ns = p > 2.0 * SEARCH ? search(&s, p, cont, rate) : p;
             g->s_old = s_cur;
-            g->has_old = 1;
+            g->has_old |= 1u;
             g->s_new = ns;
             g->age = age = 0;
         }
         int m = HOP - age;
         if (m > n - t)
             m = n - t;
-        if (g->has_old)
+        if (g->has_old & 1u)
             grain_run(&s, g->s_old, age + HOP, rate, m, ol + t, or ? or + t : 0);
         grain_run(&s, g->s_new, age, rate, m, ol + t, or ? or + t : 0);
         g->age = age + m;
@@ -375,6 +403,7 @@ int clip_render(void *pad_, int unused, int64_t pos64, float rate, int n, int *c
     *consumed = ip - pos;
     *frac = (float)(p - ip);
     g->expect = p;
+    g->has_old = (g->has_old & 1u) | (now << 16);
     *result = outbuf;
     return 1;
 }

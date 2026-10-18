@@ -10,6 +10,7 @@ sym = symbols(os.path.join(ROOT, "out", "cave.elf"))
 
 P_FILT2, P_RES2, P_DRIVE, P_SHIFT, P_PLAYLEN, P_STRETCH = 0x1C0, 0x1C1, 0x1C2, 0x1C3, 0x1C4, 0x1C6  # 0x1c5 is taken by the firmware (0x0807d37e)
 P_SMODE = 0x1C7
+P_LFADE = 0x183
 STORE_ADD = 0x0808951E
 
 # pad record init 0x08089548: the two pad blocks' "add Filter (0xaa)" -> add it, then the new parameters
@@ -69,7 +70,7 @@ CAPACITY = [(0x0808954E, "4021", "4821"), (0x08089F98, "4021", "4821")]
 # Sync's beats table (0x080c4f7c, 7 entries) -> sync_beats (8) in the clip parameter handler's literal
 DATA = [(0x080B74E4, 0x080C4F7C, "sync_beats")]
 
-# Clip loop page (page 2): Loop Mode, Beat Count, Quant Size, Sync -> + Shift, Play Len, Stretch, Stretch Mode
+# Clip loop page (page 2): Loop Mode, Beat Count, Quant Size, Sync -> + Shift, Play Len, Stretch, Stretch Mode, Loop Fade
 CLIP_TABLES = [0x080C6A1C, 0x080C6C38]
 LOOP_PAGE = 2 * 0x5A
 LOOP = [0x6F, 0xB4, 0x2A, 0x76]
@@ -80,6 +81,6 @@ PATCHES = (
     + [(at, bytes.fromhex(old), bl(at, sym[name])) for at, old, name in THUNKS]
     + [(at, struct.pack("<I", old), struct.pack("<I", sym[name])) for at, old, name in DATA]
     + [(at, bytes.fromhex(old), bytes.fromhex(new)) for at, old, new in CAPACITY]
-    + [(t + LOOP_PAGE, struct.pack("<8H", *LOOP, 0, 0, 0, 0),
-       struct.pack("<8H", *LOOP, P_SHIFT, P_PLAYLEN, P_STRETCH, P_SMODE)) for t in CLIP_TABLES]
+    + [(t + LOOP_PAGE, struct.pack("<9H", *LOOP, 0, 0, 0, 0, 0),
+       struct.pack("<9H", *LOOP, P_SHIFT, P_PLAYLEN, P_STRETCH, P_SMODE, P_LFADE)) for t in CLIP_TABLES]
 )

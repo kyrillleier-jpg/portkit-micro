@@ -164,14 +164,14 @@ check("Fidelity list: Normal, HighQ, 5 machines, 16k .. 2k", names == NAMES and 
 check("label 'Fidelity:', xml name stays 'interpqual'",
       e.cstr(seen["label"]) == "Fidelity:" and e.cstr(seen["xml"]) == "interpqual", (e.cstr(seen["label"]), e.cstr(seen["xml"])))
 check("new knobs registered: Filter 2 (bipolar), Res 2, Drive",
-      knobs[:6] == [(0x1C0, 9, "Filter 2:", -1000, 1000, "pkfilt2"), (0x1C1, 8, "Res 2:", 0, 1000, "pkres2"),
+      knobs[:7] == [(0x1C0, 9, "Filter 2:", -1000, 1000, "pkfilt2"), (0x1C1, 8, "Res 2:", 0, 1000, "pkres2"),
                 (0x1C2, 8, "Drive:", 0, 1000, "pkdrive"), (0x1C3, 1, "Shift ms:", -100, 100, "pkshift"),
                 (0x1C6, 1, "Stretch %:", -100, 100, "pkstretch"),
-                (0x1C8, 8, "FX3 Send:", 0, 1000, "fx3send")], knobs)
+                (0x1C8, 8, "FX3 Send:", 0, 1000, "fx3send"), (0x183, 1, "Loop Fade:", 0, 50, "pkloopfade")], knobs)
 check("master section knobs registered after them (master.c; Dist Type is a list)",
-      [k[0] for k in knobs[6:]] == [0x1A1, 0x1A2, 0x1A3, 0x1A5, 0x1A6, 0x19E, 0x1A8, 0x1A9, 0x1AB, 0x1AC]
+      [k[0] for k in knobs[7:]] == [0x1A1, 0x1A2, 0x1A3, 0x1A5, 0x1A6, 0x19E, 0x1A8, 0x1A9, 0x1AB, 0x1AC]
       and [lists.get(i, ("",))[0] for i in (0x19D, 0x19F, 0x17D, 0x17F, 0x1A7)]
-      == ["Comp Type:", "Ratio:", "Attack:", "Release:", "Dist Type:"], knobs[6:])
+      == ["Comp Type:", "Ratio:", "Attack:", "Release:", "Dist Type:"], knobs[7:])
 pl = lists.get(0x1C4)
 pl_names = [e.cstr(e.r32(pl[1] + 4 * k)) for k in range(pl[2])] if pl else []
 check("Play Len list: Full, 1/4 .. 32 bars in quarter bars, xml pkplaylen",
@@ -463,10 +463,10 @@ e.call(SYM["clip_seek_thunk"], stream, 100, regs=[(UC_ARM_REG_R4, cpad)])
 del e.stubs[0x080A4624]
 check("Shift: segment prefetch seek follows (wrapped)", seeks == [472, 580], seeks)
 set_param(0x1C3, 0)
-clip_loop = [struct.unpack_from("<8H", IMG, t + 2 * 0x5A - 0x08040000) for t in (0x080C6A1C, 0x080C6C38)]
-check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len, Stretch, Stretch Mode",
-      all(m == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C6, 0x1C7) for m in clip_loop), clip_loop)
-check("full pad record (type 3): 66 entries, capacity raised to 72", cnt3 == 66 and cap3 == 72 and ids3.get(0x1C8) == 0,
+clip_loop = [struct.unpack_from("<9H", IMG, t + 2 * 0x5A - 0x08040000) for t in (0x080C6A1C, 0x080C6C38)]
+check("Clip loop page: Loop Mode, Beat Count, Quant Size, Sync, Shift, Play Len, Stretch, Stretch Mode, Loop Fade",
+      all(p == (0x6F, 0xB4, 0x2A, 0x76, 0x1C3, 0x1C4, 0x1C6, 0x1C7, 0x183) for p in clip_loop), clip_loop)
+check("full pad record (type 3): 67 entries, capacity raised to 72", cnt3 == 67 and cap3 == 72 and ids3.get(0x1C8) == 0,
       (cnt3, cap3))
 
 
@@ -653,11 +653,37 @@ _md = Cs(CS_ARCH_ARM, CS_MODE_THUMB | CS_MODE_MCLASS)
 _md.skipdata = True
 _ours = {f"#{v:#x}" for v in (0x1C0, 0x1C1, 0x1C2, 0x1C3, 0x1C4, 0x1C6, 0x1C7, 0x1C8, *range(0x191, 0x19C),
                                0x1A1, 0x1A2, 0x1A3, *range(0x1A5, 0x1AA), 0x1AB, 0x1AC,
-                               0x19D, 0x19E, 0x19F, 0x17D, 0x17F)}
+                               0x19D, 0x19E, 0x19F, 0x17D, 0x17F, 0x183)}
 _uses = [hex(i.address) for i in _md.disasm(IMG[:0x080BC000 - 0x08040000], 0x08040000)   # code, not the data after it
          if i.mnemonic in ("movs", "movw", "mov.w", "cmp", "cmp.w") and "sp" not in i.op_str
          and any(i.op_str.endswith(v) for v in _ours)]
-check("new parameter ids 0x1c0-0x1c4, 0x1c6-0x1c8, 0x191-0x19b, 0x1a1-0x1a3, 0x1a5-0x1a9, 0x1ab, 0x1ac, 0x19d-0x19f, 0x17d, 0x17f: no immediate use in the stock code", not _uses, _uses)
+check("new parameter ids 0x1c0-0x1c4, 0x1c6-0x1c8, 0x191-0x19b, 0x1a1-0x1a3, 0x1a5-0x1a9, 0x1ab, 0x1ac, 0x19d-0x19f, 0x17d, 0x17f, 0x183: no immediate use in the stock code", not _uses, _uses)
+
+# --- Loop Fade (0x183): a dip around the loop's seams, on the frames as read (same stream: value = index, 1000 frames)
+def fade_read(pos, n):
+    dst = e.new(4 * n)
+    e.call(SYM["clip_read1_thunk"], stream, dst, n, pos, stack=(0,), regs=[(UC_ARM_REG_R4, cpad)])
+    return e.rf(dst, n)
+def gain_at(q):
+    v = fade_read(q, 1)[0]
+    return v / q
+set_param(0x1C3, 0)
+set_param(0x183, 0)
+check("Loop Fade 0: reads unchanged", fade_read(0, 64) == [float(i) for i in range(64)])
+set_param(0x183, 2)                                        # 2 ms = 96 frames (unsynced pad: loop end = file end)
+g = {q: round(gain_at(q), 3) for q in (24, 48, 95, 96, 500, 903, 952, 975)}
+print("     Loop Fade 2 ms, gains:", g)
+check("Loop Fade 2 ms: fade in over the first 96 frames (sine), out over the last 96, middle untouched",
+      abs(g[48] - 0.707) < 0.01 and g[24] < g[48] < g[95] <= 1.0 and g[96] == g[500] == g[903] == 1.0
+      and abs(g[952] - 0.707) < 0.02 and g[975] < g[952] and fade_read(999, 1)[0] < 1.0, g)
+set_param(0x1C3, 5)                                        # Shift 5 ms = 240 frames: the file's seam at logical 760
+out = fade_read(700, 120)
+seam = {q: out[q - 700] / ((q + 240) % 1000) for q in (712, 759, 761, 808, 819)}
+check("Loop Fade with Shift: dip around the file's seam (logical 760), outside it untouched",
+      seam[759] < 0.03 and seam[761] < 0.03 and abs(seam[712] - 0.707) < 0.03 and abs(seam[808] - 0.707) < 0.03
+      and seam[819] < 1.0, {k: round(v, 3) for k, v in seam.items()})
+set_param(0x1C3, 0)
+set_param(0x183, 0)
 
 # --- smooth time stretch (WSOLA, clip_render in place of 0x080b55ac), real stream reads on an in-memory mono stream
 SR = 48000
@@ -679,9 +705,11 @@ def wbuf(cap):
     return b
 
 
-def render(stretch, mode=0, rate=1.0, blocks=120, n=128, seglen=24000.0, unit=24000.0, start=4000, slot=1):
+def render(stretch, mode=0, rate=1.0, blocks=120, n=128, seglen=24000.0, unit=24000.0, start=4000, slot=1, jumps=None,
+           changes=None, calls=None):
     set_param(0x1C6, stretch)
     set_param(0x1C7, mode)
+    e.w32(0x2406C400 + ((1 * 4 + 2) * 4 + slot) * 40, 0)      # this slot's grain state: fresh (time stands still here)
     p_ = engine_pad()
     e.w32(p_ + 0x24, wsrc)
     e.wf(p_ + 0x1FC, [seglen])
@@ -692,7 +720,11 @@ def render(stretch, mode=0, rate=1.0, blocks=120, n=128, seglen=24000.0, unit=24
     src_b, out_b = wbuf(600), wbuf(600)
     cons, res = e.new(4), e.new(4)
     pos, out, steps = start, [], []
-    for _ in range(blocks):
+    for blk in range(blocks):
+        if jumps and blk in jumps:                                 # the stock sets the next segment's position
+            pos = jumps[blk] if jumps[blk] >= 0 else pos - jumps[blk]
+        if changes and blk in changes:                             # Stretch turned while playing
+            set_param(0x1C6, changes[blk])
         ok = e.call(SYM["clip_render"], p_, 0, pos & 0xFFFFFFFF, 0, s=(rate,),
                     stack=(n, cons, frac_p, src_b, out_b, res))
         rb = e.r32(res)
@@ -857,6 +889,27 @@ for mode, tables in TABLES.items():
         ids = list(page[:page.index(0)])
         ok &= P_INTERP in ids and ids.index(P_INTERP) == ids.index(0xA6) + 1 and len(set(ids)) == len(ids)
     check(f"{mode}: Fidelity on the pad settings page after Excl Group", ok)
+
+# --- turning Stretch while playing: the next segment's position jumps; spliced, not cut (pkZC)
+def max_step(sig, a, b):
+    return max(abs(sig[k] - sig[k - 1]) for k in range(a, b))
+SIN_STEP = 2 * math.pi * 1000 / SR * 0.8                         # largest sample step of the 0.8 x 1 kHz source
+oj, _, _ = render(40, mode=2, blocks=80, jumps={40: 4000 + 40 * 128 + 7333}, changes={40: -30})
+step_j = max_step(oj, 40 * 128 - 8, 40 * 128 + 3 * 512)
+step_n = max_step(oj, 512, 40 * 128 - 8)
+print(f"     jump while playing: largest sample step {step_j:.3f} (before the jump {step_n:.3f}, sine {SIN_STEP:.3f})")
+check("WSOLA, Stretch turned + the segment position jumps while playing: no click (steps stay those of the source)",
+      step_j < 1.5 * SIN_STEP and step_n < 1.5 * SIN_STEP, (step_j, step_n))
+os_, _, _ = render(40, mode=2, blocks=60, jumps={40: 10})
+check("WSOLA, jump to the clip's start (retrigger / loop end): restarted at once (one grain at full weight)",
+      abs(os_[40 * 128] - 0.8 * math.sin(2 * math.pi * 1000 * 10 / SR)) < 0.05, os_[40 * 128])
+stock_calls = [0]
+_orig = e.stubs.get(0x080B55AC)
+e.stub(0x080B55AC, lambda uc: (stock_calls.__setitem__(0, stock_calls[0] + 1), uc.reg_write(UC_ARM_REG_R0, 0)))
+oa, _, _ = render(50, mode=0, blocks=40, changes={20: 0})
+del e.stubs[0x080B55AC]
+check("Stretch Mode Auto: stays smooth when Stretch is turned to 0 while playing (no switch to the stock read)",
+      stock_calls[0] == 0 and max_step(oa, 512, len(oa)) < 1.5 * SIN_STEP, (stock_calls[0], max_step(oa, 512, len(oa))))
 
 print(f"\n{'FAILED: ' + str(failures) if failures else 'all passed'}")
 sys.exit(1 if failures else 0)

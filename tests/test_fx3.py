@@ -166,8 +166,8 @@ t3 = e.new(4)
 e.mu.mem_write(t3, b"\x03")
 e.call(SYM["rec_reinit"], REC_PAD, t3)
 get = lambda pid: e.call(0x080894D0, REC_PAD, pid)
-check("rec_reinit: full pad record (66 entries), FX1 / FX2 / FX3 sends kept (300 / 700 / 500), Drive reset (0)",
-      e.r16(REC_PAD + 0xA) == 66 and (get(0xBB), get(0xBC), get(0x1C8), get(0x1C2)) == (300, 700, 500, 0),
+check("rec_reinit: full pad record (67 entries), FX1 / FX2 / FX3 sends kept (300 / 700 / 500), Drive reset (0)",
+      e.r16(REC_PAD + 0xA) == 67 and (get(0xBB), get(0xBC), get(0x1C8), get(0x1C2)) == (300, 700, 500, 0),
       (e.r16(REC_PAD + 0xA), get(0xBB), get(0xBC), get(0x1C8), get(0x1C2)))
 check("patch: 0x0807b59e calls rec_reinit; the input node's vtable entry 0x080ddfb4 -> mon_node",
       struct.unpack_from("<I", IMG, 0x080DDFB4 - 0x08040000)[0] == SYM["mon_node"] | 1)

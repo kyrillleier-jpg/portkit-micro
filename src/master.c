@@ -10,7 +10,7 @@
  *   master_comp (hooked at 0x08097056) writes them from the settings store before every block.
  * - Distortion: on bus 0 (Out 1/2) after the FX returns and the master EQ, before the compressor (thunk at 0x08096d1c,
  *   the compressor flag's load, so it runs whether the compressor is on or not). 2x oversampled (31-tap half-band
- *   up / down), shapers Soft (tanh) / Hard (clip) / Fold (triangle) / Tube (asymmetric tanh, DC blocked; state 0x2406f800), Tone (one-pole
+ *   up / down), shapers Soft (tanh) / Hard (clip) / Fold (triangle) / Tube (asymmetric tanh, DC blocked; state 0x2406a800), Tone (one-pole
  *   low-pass, the stock cutoff curve), Mix (dry delayed by the filters' 15 samples), Level.
  * - Comp Type (0x19d): Stock = the stock DSP above; SSL = an SSL-style bus compressor of ours (ssl_run, end of
  *   file) with the SSL's switch values (ratio 0x19f, attack 0x17d, release 0x17f incl. Auto); threshold and Gain
@@ -341,7 +341,8 @@ struct dist {
     float drive, mix, level;     /* smoothed: the last block's values */
     struct dch ch[2];
 };
-#define DS ((struct dist *)0x2406f800u)
+#define DS ((struct dist *)0x2406a800u)
+_Static_assert(sizeof(struct dist) <= 0x300, "distortion state must end before 0x2406ab00 (tests/test_ram.py)");
 #define DMAGIC 0x44495355u       /* "DISU" (ring layout) */
 
 static float run1(struct dch *c, int type, float in, float drive, float tone_a, int tone_on)

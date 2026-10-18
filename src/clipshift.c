@@ -90,8 +90,74 @@ static int run(int pos, int n, int s, int total, int *at)
     return m < n ? m : n;
 }
 
+/* --- Loop Fade (0x183, ms) ------------------------------------------------------------------------------------- */
+/* A recorded loop has no material beyond its ends, so a true crossfade is not possible; Loop Fade is a short dip
+   instead: the last F frames before a seam fade out, the first F after it fade in (quarter sine, F = ms x 48). Seams:
+   the loop start (logical 0), the loop end (synced: segments x segment length x Stretch speed, as the stock wraps,
+   at most the file's end; else the file's end) and, with Shift, the file's own seam at logical total - shift. Applied
+   to the frames as read (logical position pos + i), so the stock read, its resampling and the WSOLA grains all get it. */
+#define P_LFADE 0x183
+#define PAD_SEGLEN 0x1fc            /* float: file frames per segment */
+int clip_segments(const uint8_t *pad);
+static float clip_speed_of(const uint8_t *pad);
+
+static inline __attribute__((always_inline)) float qsin(float t)  /* sin(pi / 2 t), 0 <= t <= 1 */
+{
+    float t2 = t * t;
+    return t * (1.5707963f + t2 * (-0.6459641f + t2 * 0.0751678f));   /* coefficients sum to 1: ends at exactly 1 */
+}
+
+static void fade_zone(float *l, float *r, int n, int pos, int a, int b, int out, float inv)
+{
+    /* frames with logical position in [a, b): out ? fading out towards b : fading in from a */
+    int lo = a > pos ? a - pos : 0, hi = b < pos + n ? b - pos : n;
+    for (int i = lo; i < hi; i++) {
+        int d = out ? b - 1 - (pos + i) : pos + i - a;
+        float g = qsin((float)d * inv);
+        l[i] *= g;
+        if (r && r != l)
+            r[i] *= g;
+    }
+}
+
+static void loop_fade(const uint8_t *pad, void *stream, float *l, float *r, int n, int pos)
+{
+    if (!pad || n <= 0)
+        return;
+    int ms = (int)pad_setting(pad, P_LFADE);
+    if (ms <= 0 || ms > 50)
+        return;
+    int total = fw_frames(stream);
+    if (total <= 0 || total >= UNKNOWN_FRAMES)
+        return;
+    int end = total;
+    if (pad[PAD_SYNCED] && !pad[PAD_SLICED]) {
+        float e = (float)clip_segments(pad) * *(const float *)(pad + PAD_SEGLEN) * clip_speed_of(pad);
+        if (e > 1.0f && e < (float)total)
+            end = (int)e;
+    }
+    int f = ms * FRAMES_PER_MS;
+    if (f > end / 4)
+        f = end / 4;
+    if (f < 2)
+        return;
+    float inv = 1.0f / (float)f;
+    if (pos < f)
+        fade_zone(l, r, n, pos, 0, f, 0, inv);
+    if (pos + n > end - f)
+        fade_zone(l, r, n, pos, end - f, end, 1, inv);
+    int sh = shift_of(pad, stream, &total);
+    if (sh) {
+        int seam = total - sh;                          /* logical position of the file's seam */
+        if (seam > f && seam < end - f) {
+            fade_zone(l, r, n, pos, seam - f, seam, 1, inv);
+            fade_zone(l, r, n, pos, seam, seam + f, 0, inv);
+        }
+    }
+}
+
 /* thunks in clipshift_thunk.S pass the pad (r4 of 0x080b55ac / 0x080b4644 / 0x080b490c) as the last argument */
-int clip_read1(void *stream, float *dst, int n, int pos, int ch, const uint8_t *pad)
+static int clip_read1_raw(void *stream, float *dst, int n, int pos, int ch, const uint8_t *pad)
 {
     int total, s = shift_of(pad, stream, &total);
     if (!s)
@@ -107,7 +173,7 @@ int clip_read1(void *stream, float *dst, int n, int pos, int ch, const uint8_t *
     return ok;
 }
 
-int clip_read2(void *stream, float *left, float *right, int n, int pos, const uint8_t *pad)
+static int clip_read2_raw(void *stream, float *left, float *right, int n, int pos, const uint8_t *pad)
 {
     int total, s = shift_of(pad, stream, &total);
     if (!s)
@@ -122,6 +188,20 @@ int clip_read2(void *stream, float *left, float *right, int n, int pos, const ui
         pos += m;
         n -= m;
     }
+    return ok;
+}
+
+int clip_read1(void *stream, float *dst, int n, int pos, int ch, const uint8_t *pad)
+{
+    int ok = clip_read1_raw(stream, dst, n, pos, ch, pad);
+    loop_fade(pad, stream, dst, 0, n, pos);
+    return ok;
+}
+
+int clip_read2(void *stream, float *left, float *right, int n, int pos, const uint8_t *pad)
+{
+    int ok = clip_read2_raw(stream, left, right, n, pos, pad);
+    loop_fade(pad, stream, left, right, n, pos);
     return ok;
 }
 

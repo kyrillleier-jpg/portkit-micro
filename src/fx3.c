@@ -88,6 +88,7 @@ struct fx3 {
     uint32_t idle;               /* blocks since the bus last had signal */
 };
 #define F3 ((volatile struct fx3 *)0x2406d200u)
+_Static_assert(sizeof(struct fx3) <= 0x100, "FX3 state must fit its slot (tests/test_ram.py)");
 #define F3MAGIC 0x46583321u      /* "FX3!" */
 
 /* the FX3 record made into a reverb record if it is still empty (UI thread: allocates) */
