@@ -30,21 +30,21 @@ How to use each feature, with screenshots: **[docs/manual](docs/manual/README.md
 | Feature | Where on the unit | Status |
 |---|---|---|
 | **Fidelity**: Interp list Normal, HighQ, SP1200, SP-12, S950, MPC60, SP Raw, 16k..2k | Sample pads → Interp | hardware |
-| Fidelity also on Clip, Slicer and Granular pads | pad page of those modes | emulation |
-| **24 dB filter**: state-variable filter instead of the pad biquad, clean resonance | pad filter | emulation |
-| **Drive** (before the filters) and **Filter 2** + Res 2 (a second 24 dB filter in series) | main page of every pad mode | emulation |
+| Fidelity also on Clip, Slicer and Granular pads | pad page of those modes | hardware |
+| **24 dB filter**: state-variable filter instead of the pad biquad, clean resonance | pad filter | hardware |
+| **Drive** (before the filters) and **Filter 2** + Res 2 (a second 24 dB filter in series) | main page of every pad mode | hardware |
 | **Clip Shift**: moves the audio against the loop by −100..+100 ms | clip loop page | hardware |
-| **Clip Play Len**: Full or 1/4..32 bars (needs Sync) | clip loop page | emulation |
+| **Clip Play Len**: Full or 1/4..32 bars (needs Sync) | clip loop page | hardware |
 | **Clip Stretch**: tempo ±100 % (needs Sync); **Stretch Mode** Auto / Jump / Smooth (Smooth keeps the pitch) | clip loop page | hardware |
-| **Clip Loop Fade**: 0..50 ms fade at the loop seams (against clicks) | clip loop page | emulation |
-| **Sync 1/32**; Play Len / Stretch are hidden when Quant Size / Sync would make them ineffective | clip loop page | emulation |
-| **Reverb types** Plate / Room / Hall / Chamber with 10 settings and Level | Effects → RVB | hardware (levels: emulation) |
-| **FX3**: a third send with a second reverb, on its own FX row | Effects: left arrow = pages, tap RVB again = RVB/FX3; right arrow = FX3 settings, again = master EQ | hardware (row layout: emulation) |
+| **Clip Loop Fade**: 0..50 ms fade at the loop seams (against clicks) | clip loop page | hardware |
+| **Sync 1/32**; Play Len / Stretch are hidden when Quant Size / Sync would make them ineffective | clip loop page | hardware |
+| **Reverb types** Plate / Room / Hall / Chamber with 10 settings and Level | Effects → RVB | hardware (levels: hardware) |
+| **FX3**: a third send with a second reverb, on its own FX row | Effects: left arrow = pages, tap RVB again = RVB/FX3; right arrow = FX3 settings, again = master EQ | hardware (row layout: hardware) |
 | **Master compressor page** (threshold, ratio, attack, release, gain) with type **Stock / SSL** and **Mix** | Tools → left arrow | emulation |
-| **Master distortion**: Soft / Hard / Fold / Tube with 2x oversampling; Drive, Tone, Mix, Level | Tools → right arrow | emulation |
+| **Master distortion**: Soft / Hard / Fold / Tube with 2x oversampling; Drive, Tone, Mix, Level | Tools → right arrow | hardware |
 | **Recording**: a pad's FX1 / FX2 / FX3 sends are kept when it is recorded into; the input monitor goes through them | recording to a pad | emulation |
-| **Pads 9–16** as a second page of the pad grid | left arrow on Pads and Effects, top-left field on Mixer, left arrow in the pad picker | hardware (encoder on page 2: emulation) |
-| **CPU load** in the status bar | right end of the status bar | emulation |
+| **Pads 9–16** as a second page of the pad grid | left arrow on Pads and Effects, top-left field on Mixer, left arrow in the pad picker | hardware (encoder on page 2: hardware) |
+| **CPU load** in the status bar | right end of the status bar | hardware |
 
 Not ported: the Blackbox mod's machine drive (the micro has no saturation parameter to drive it from).
 
