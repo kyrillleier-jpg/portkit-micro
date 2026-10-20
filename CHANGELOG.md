@@ -1,0 +1,90 @@
+# Changelog
+
+portkit for the 1010music bitbox micro, on top of the stock firmware **2.3.4**. Versions are named after the stock
+version plus the portkit build (`2.3.4-pkZD`); the splash screen shows it.
+
+Status: **hardware** = tested on a unit, **emulation** = verified in the test suite and the simulator only.
+
+## 2.3.4-pkZD (2026-10-20): first public release
+
+Patch your own stock `MICRO.BIN` 2.3.4 in the browser: <https://kyrillleier-jpg.github.io/portkit-micro/>.
+Manual with screenshots: [docs/manual](docs/manual/README.md) (also as PDF).
+
+### Sound
+
+- **Fidelity**: the pad's Interp list becomes Fidelity, with the machine modes SP1200, SP-12, S950, MPC60 and SP Raw
+  and fixed sample-rate reductions 16k, 12k, 10k, 8k, 6k, 4k, 2k (12 bit, no anti-aliasing). On Sample pads
+  (hardware) and on Clip, Slicer and Granular pads (emulation).
+- **24 dB filter**: the pad filter is a 24 dB/octave state-variable filter instead of the stock 12 dB biquad; same
+  Filter / Res knobs, clean resonance (emulation).
+- **Drive** (tanh saturation before the filters) and **Filter 2 / Res 2** (a second 24 dB filter in series) on the
+  main page of every pad mode (emulation).
+
+### Clips
+
+- **Shift**: moves the audio against the loop by −100..+100 ms (hardware).
+- **Play Len**: Full or 1/4..32 bars (emulation).
+- **Stretch**: tempo ±100 % (hardware), with **Str Mode** Auto / Jump / Smooth; Smooth time-stretches without
+  changing the pitch (hardware).
+- **Loop Fade**: 0..50 ms fade at the loop seams against clicks (emulation).
+- **Sync 1/32**; Play Len and Stretch are hidden while Sync / Quant Size make them ineffective (emulation).
+
+### Effects
+
+- **Reverb types** Plate / Room / Hall / Chamber with ten settings and a Level control (hardware), level-matched to
+  the plate (emulation).
+- **FX3**: a third send with a second, independent reverb. Tap the selected RVB cell on the Effects screen to switch
+  to FX3; the pads then show their FX3 send; right arrow = FX3 settings, again = master EQ (hardware; the current
+  layout with FX3 on its own row: emulation).
+
+### Master section
+
+- **Compressor page** (Tools → left arrow): threshold, ratio, attack, release, gain for the stock compressor, plus
+  **Comp Type SSL** (ratio 2:1 / 4:1 / 10:1, attack 0.1–30 ms, release 0.1–1.2 s or Auto) and **Mix** for parallel
+  compression (emulation).
+- **Master distortion** (Tools → right arrow twice): Soft / Hard / Fold / Tube with 2x oversampling, Drive, Tone,
+  Mix, Level (emulation).
+
+### Workflow
+
+- **Pads 9–16** as a second page of the pad grid: left arrow on Pads and Effects, top-left field on the Mixer, left
+  arrow in the pad picker (hardware; encoder on page 2: emulation).
+- **Recording**: a pad's FX1 / FX2 / FX3 sends stay when it is recorded into; the input monitor goes through the
+  selected pad's sends (emulation).
+- **CPU load** in the status bar (emulation).
+
+### Fixed in this release (since the last test builds)
+
+- **pkZB:** crackling when turning the master distortion or the record gain, recordings that came out as
+  crackle only, and monitor sends without effect (pkZ / pkZA). Cause: part of portkit's working memory overlapped
+  buffers the firmware uses for the SD card and recording. Moved, and a test now checks every memory address
+  portkit uses (emulation).
+- **pkZC:** clicks and artefacts while turning Stretch on a playing clip; Auto no longer switches hard between
+  stock playback and Smooth when Stretch passes 0 % (emulation).
+- **pkZ:** about half the CPU cost of the distortion and 8–14 % less for the reverb types (emulation, measured in
+  instructions per audio block).
+
+### Known issues
+
+- Loop Fade: a synced clip played at a different tempo without Smooth stretch can reach its loop jump before the
+  fade-out zone; the fade at the loop end is then skipped.
+- In the simulator the title "Pads 1-8" overlaps the SD-card space readout in the status bar (not checked on a unit).
+- Features marked *emulation* above have not been confirmed on a unit yet. Feedback welcome.
+
+## Test builds (not released)
+
+| Build | Date | Change |
+|---|---|---|
+| pkZA | 2026-10-14 | sends kept across recording, input monitor through the sends |
+| pkZ | 2026-10-12 | lower CPU cost of the DSP |
+| pkY | 2026-10-11 | compressor type SSL, compressor Mix |
+| pkW, pkX | 2026-10-10 | FX3 on its own FX row; master compressor and distortion pages |
+| pkU, pkV | 2026-10-10 | FX3 (third send, second reverb); reverb types level-matched |
+| pkT | 2026-10-10 | reverb types Plate / Room / Hall / Chamber |
+| pkN – pkS | 2026-10-10 | Stretch fixes, Smooth time stretch (WSOLA), CPU load readout |
+| pkJ – pkM | 2026-10-10 | Stretch fixes, Sync 1/32, hide ineffective clip controls |
+| pkH, pkI | 2026-10-10 | clip Play Len; clip Stretch |
+| pkF, pkG | 2026-10-10 | Drive, Filter 2, clip Shift |
+| pk3 – pkE | 2026-10-09/10 | pads 9–16 (paging, pad picker, encoder on page 2) |
+| pk2 | 2026-10-09 | Fidelity on Clip, Slicer and Granular pads |
+| pk1 | 2026-10-09 | Fidelity and the 24 dB filter |

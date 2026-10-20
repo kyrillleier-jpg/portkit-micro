@@ -4,7 +4,7 @@ Community firmware for the **1010music bitbox micro** (firmware 2.3.4): Fidelity
 filters (ported from Justin Joe's [blackbox-mod](https://github.com/j3threejay/blackbox-mod)), plus clip
 time-stretch tools, more reverb types, a third FX send, a master compressor and distortion, and a second page of pads.
 
-**→ [Patch your firmware in the browser](https://kyrillleier-jpg.github.io/portkit-micro/)**
+**→ [Patch your firmware in the browser](https://kyrillleier-jpg.github.io/portkit-micro/)** · **[Manual with screenshots](docs/manual/README.md)** ([PDF](docs/manual/portkit-micro-manual.pdf)) · **[Changelog](CHANGELOG.md)**
 
 > Unofficial. Not affiliated with or supported by 1010music. Running modified firmware is at your own risk and may
 > affect your warranty. Keep your stock `MICRO.BIN` and flash it back before sending a unit in for service.
@@ -22,6 +22,8 @@ time-stretch tools, more reverb types, a third FX send, a master compressor and 
 **Going back:** the same steps with the stock `MICRO.BIN`.
 
 ## What you get
+
+How to use each feature, with screenshots: **[docs/manual](docs/manual/README.md)**.
 
 **hardware** = tested on a unit, **emulation** = verified in the test suite and the simulator, not yet on a unit.
 
@@ -41,7 +43,7 @@ time-stretch tools, more reverb types, a third FX send, a master compressor and 
 | **Master compressor page** (threshold, ratio, attack, release, gain) with type **Stock / SSL** and **Mix** | Tools → left arrow | emulation |
 | **Master distortion**: Soft / Hard / Fold / Tube with 2x oversampling; Drive, Tone, Mix, Level | Tools → right arrow | emulation |
 | **Recording**: a pad's FX1 / FX2 / FX3 sends are kept when it is recorded into; the input monitor goes through them | recording to a pad | emulation |
-| **Pads 9–16** as a second page of the pad grid | left arrow on Pads, top-left field on Mixer, tap DLY/RVB again on Effects, left arrow in the pad picker | hardware (encoder on page 2: emulation) |
+| **Pads 9–16** as a second page of the pad grid | left arrow on Pads and Effects, top-left field on Mixer, left arrow in the pad picker | hardware (encoder on page 2: emulation) |
 | **CPU load** in the status bar | right end of the status bar | emulation |
 
 Not ported: the Blackbox mod's machine drive (the micro has no saturation parameter to drive it from).
