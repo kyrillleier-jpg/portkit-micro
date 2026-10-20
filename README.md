@@ -34,6 +34,17 @@ Status: **hardware** = tested on a unit, **emulation** = verified in Unicorn / R
 | Pads 9–16 as a second page of the pad grid (button paging on Pads, Mixer, Effects, pad picker) | hardware (pkB: pages and picker), encoder on page 2 emulation (pkE) |
 | Machine drive (saturation as converter input) | not ported (the micro has no saturation parameter) |
 
+## Patch in the browser
+
+`docs/index.html` is a one-page patcher: open it (or the GitHub Pages site of this repo), drop your stock
+`MICRO.BIN` 2.3.4, download the result. Everything runs in the browser, nothing is uploaded. The page holds only this
+project's bytes (no 1010music firmware), checks the stock file's SHA-256 before and the result's SHA-256 after, so it
+can only produce the tested build. The patch is also in `docs/patches/*.json` (blackbox-mod's format; its `apply.py`
+applies it too).
+
+Regenerate after a change: `python3 -I tools/make_web.py` (needs a clean commit; builds, runs the tests, checks that no
+32-byte run of the stock image ends up in the patch, then writes `docs/`).
+
 ## Requirements
 
 - macOS or Linux, Python 3, `arm-none-eabi-gcc` (macOS: `brew install --cask gcc-arm-embedded`,
